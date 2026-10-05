@@ -22,6 +22,7 @@
   "build": {
     "appId": "com.noto.app",
     "productName": "Нота",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
@@ -30,10 +31,7 @@
       "electron/**/*"
     ],
     "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ]
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
@@ -42,9 +40,6 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Нота",
       "artifactName": "Noto-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "Noto-Portable-${version}.${ext}"
     }
   },
   "dependencies": {

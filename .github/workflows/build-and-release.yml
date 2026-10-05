@@ -32,16 +32,25 @@ jobs:
       - name: Build web application
         run: npm run build
 
-      - name: Build Windows Executable (.exe)
+      - name: Build Windows Installer (.exe)
         run: npx electron-builder --win --x64 --publish never
 
       - name: Verify build output
-        run: dir release
+        shell: bash
+        run: |
+          echo "Files in release directory:"
+          ls -lh release/
 
       - name: Publish to GitHub Releases
         shell: bash
         run: |
-          TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}"
-          gh release create "$TAG_NAME" release/*.exe --title "Нота $TAG_NAME — Windows Установщик" --notes "Скачайте установочный файл Noto-Setup-1.0.0.exe для установки на рабочий стол и в меню Пуск, либо Noto-Portable-1.0.0.exe для запуска без установки." --clobber
+          TAG="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists, uploading installer..."
+            gh release upload "$TAG" release/*.exe --clobber
+          else
+            echo "Creating release $TAG with installer..."
+            gh release create "$TAG" release/*.exe --title "Нота $TAG — Windows Установщик" --notes "Скачайте Noto-Setup-1.0.0.exe для установки приложения Нота на компьютер Windows." --clobber
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
