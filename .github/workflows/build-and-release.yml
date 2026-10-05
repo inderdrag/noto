@@ -27,9 +27,11 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
+        shell: bash
         run: |
+          rm -f package-lock.json
           npm install --legacy-peer-deps
-          npm install --legacy-peer-deps lightningcss-win32-x64-msvc@1.32.0 @rolldown/binding-win32-x64-msvc@1.2.12
+          npm install --legacy-peer-deps --no-save @tailwindcss/oxide-win32-x64-msvc@4.3.3 lightningcss-win32-x64-msvc@1.32.0 @rolldown/binding-win32-x64-msvc@1.2.12
           node -e "const fs = require('fs'); const targets = ['node_modules/@tailwindcss/node/node_modules/lightningcss', 'node_modules/lightningcss']; const src = 'node_modules/lightningcss-win32-x64-msvc/lightningcss.win32-x64-msvc.node'; targets.forEach(t => { if (fs.existsSync(t) && fs.existsSync(src)) { fs.copyFileSync(src, t + '/lightningcss.win32-x64-msvc.node'); console.log('Copied win32 node binary to ' + t); } });"
 
       - name: Build web application
