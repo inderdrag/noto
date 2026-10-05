@@ -55,6 +55,9 @@
     "react-dom": "^19.0.1",
     "vite": "^8.3.0"
   },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.2.12"
+  },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
