@@ -2,6 +2,11 @@
   "name": "noto",
   "productName": "Нота",
   "description": "Минималистичная цифровая тетрадь для рукописных заметок, схем и рисования",
+  "author": "Noto",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inderdrag/noto.git"
+  },
   "private": true,
   "version": "1.0.0",
   "main": "electron/main.cjs",
@@ -26,27 +31,20 @@
     ],
     "win": {
       "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "Нота-${version}-${target}.${ext}"
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Нота"
+      "shortcutName": "Нота",
+      "artifactName": "Noto-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Noto-Portable-${version}.${ext}"
     }
   },
   "dependencies": {

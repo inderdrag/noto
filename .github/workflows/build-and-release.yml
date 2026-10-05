@@ -33,20 +33,15 @@ jobs:
         run: npm run build
 
       - name: Build Windows Executable (.exe)
-        run: npx electron-builder --win --x64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Verify build output
+        run: dir release
 
       - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "Нота ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}"
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            release/*.exe
-            release/*.blockmap
+        shell: bash
+        run: |
+          TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}"
+          gh release create "$TAG_NAME" release/*.exe --title "Нота $TAG_NAME — Windows Установщик" --notes "Скачайте установочный файл Noto-Setup-1.0.0.exe для установки на рабочий стол и в меню Пуск, либо Noto-Portable-1.0.0.exe для запуска без установки." --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
