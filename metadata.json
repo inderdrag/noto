@@ -1,0 +1,6 @@
+{
+  "name": "Noto — Your digital notebook",
+  "description": "Modern standalone digital notebook for handwritten notes, sketches, formulas, diagrams, and drawing with high-performance vector engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
