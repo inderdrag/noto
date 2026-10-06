@@ -1,6 +1,6 @@
 {
   "name": "noto",
-  "productName": "Нота",
+  "productName": "Noto",
   "description": "Минималистичная цифровая тетрадь для рукописных заметок, схем и рисования",
   "author": "Noto",
   "repository": {
@@ -21,25 +21,30 @@
   },
   "build": {
     "appId": "com.noto.app",
-    "productName": "Нота",
+    "productName": "Noto",
     "npmRebuild": false,
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "build/icon.png"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Нота",
-      "artifactName": "Noto-Setup-${version}.${ext}"
+      "shortcutName": "Noto",
+      "artifactName": "Noto-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     }
   },
   "dependencies": {

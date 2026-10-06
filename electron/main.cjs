@@ -2,12 +2,14 @@ const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 
 function createWindow() {
+  const iconPath = path.join(__dirname, '../build/icon.png');
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'Нота',
+    title: 'Noto',
+    icon: iconPath,
     backgroundColor: '#0E0F14',
     autoHideMenuBar: true,
     show: false,

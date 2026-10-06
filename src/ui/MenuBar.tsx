@@ -13,12 +13,18 @@ import {
   HelpCircle, 
   Info,
   Grid,
-  Sparkles
+  Sparkles,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { ToolType, GridType } from '../types';
+import { NotoIcon } from './NotoLogo';
 
 interface MenuBarProps {
   theme?: 'light' | 'dark';
+  onToggleTheme?: () => void;
+  documentTitle?: string;
+  isSaving?: boolean;
   onNewNotebook: () => void;
   onNewPage: () => void;
   onImportNoto: () => void;
@@ -39,6 +45,9 @@ interface MenuBarProps {
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   theme = 'light',
+  onToggleTheme,
+  documentTitle,
+  isSaving = false,
   onNewNotebook,
   onNewPage,
   onImportNoto,
@@ -99,9 +108,15 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   return (
     <nav 
       ref={menuRef} 
-      className={`h-7 border-b flex items-center px-3 text-[11px] select-none relative z-40 transition-colors ${navClass}`}
+      className={`h-8 border-b flex items-center justify-between px-3 text-[11px] select-none relative z-40 transition-colors ${navClass}`}
     >
-      {/* File Menu */}
+      <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5 mr-2 pr-2.5 border-r border-neutral-200 dark:border-neutral-800 font-bold tracking-tight">
+          <NotoIcon size={15} />
+          <span className={isDark ? 'text-white' : 'text-neutral-900'}>Noto</span>
+        </div>
+
+        {/* File Menu */}
       <div className="relative">
         <button
           onClick={() => setOpenMenu(openMenu === 'file' ? null : 'file')}
@@ -235,7 +250,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               onClick={() => handleAction(onResetZoom)}
               className={`w-full text-left px-3 py-1.5 flex items-center justify-between transition-colors ${itemHover}`}
             >
-              <span className="flex items-center gap-2"><Maximize className="w-3.5 h-3.5 text-blue-500" /> Масштаб 70% (По умолчанию)</span>
+              <span className="flex items-center gap-2"><Maximize className="w-3.5 h-3.5 text-blue-500" /> Сбросить масштаб (100%)</span>
               <span className="text-[10px] text-neutral-400">Ctrl 0</span>
             </button>
 
@@ -289,6 +304,42 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <Info className="w-3.5 h-3.5 text-neutral-400" /> О программе Noto
             </button>
           </div>
+        )}
+      </div>
+      </div>
+
+      {/* Right controls: Document Title, Autosave indicator, Theme Switcher (No OS window buttons) */}
+      <div className="flex items-center gap-2.5">
+        {documentTitle && (
+          <span className={`text-[11px] truncate max-w-[260px] hidden sm:inline ${
+            isDark ? 'text-neutral-400' : 'text-neutral-600'
+          }`}>
+            {documentTitle}
+          </span>
+        )}
+
+        {isInEditor && (
+          <span className="text-[10px] hidden xs:inline">
+            {isSaving ? (
+              <span className="text-blue-500 animate-pulse font-medium">Сохранение...</span>
+            ) : (
+              <span className={isDark ? 'text-neutral-500' : 'text-neutral-400'}>Сохранено</span>
+            )}
+          </span>
+        )}
+
+        {onToggleTheme && (
+          <button
+            onClick={onToggleTheme}
+            title={isDark ? 'Светлая тема' : 'Тёмная тема'}
+            className={`p-1 rounded-md transition-colors ${
+              isDark 
+                ? 'hover:bg-neutral-800 text-neutral-400 hover:text-white' 
+                : 'hover:bg-neutral-100 text-neutral-600 hover:text-neutral-950'
+            }`}
+          >
+            {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-blue-600" />}
+          </button>
         )}
       </div>
     </nav>

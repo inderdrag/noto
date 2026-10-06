@@ -1,4 +1,4 @@
-import { Notebook, Folder, AppSettings, Page, PageBackground } from '../types';
+import { Notebook, Folder, AppSettings, Page, PageBackground, GridType } from '../types';
 
 const DB_NAME = 'noto_notebook_db';
 const DB_VERSION = 1;
@@ -10,11 +10,27 @@ const STORE_CRASH_RECOVERY = 'crash_recovery';
 export const DEFAULT_PAGE_BACKGROUND: PageBackground = {
   color: '#FFFFFF',
   type: 'grid',
-  gridSize: 25,
+  gridSize: 24,
   gridColor: '#94A3B8',
   gridOpacity: 0.9,
   lineWidth: 1,
 };
+
+/**
+ * Standard page dimensions:
+ * - Blank paper: ISO 216 standard A4 format (840 x 1188 px, 210 x 297 mm)
+ * - Grid, Ruled, Dots: Russian school notebook format (850 x 1025 px, 170 x 205 mm)
+ */
+export function getStandardPageDimensions(type: GridType = 'grid', isLandscape: boolean = false): { width: number; height: number } {
+  if (type === 'blank') {
+    return isLandscape 
+      ? { width: 1188, height: 840 }
+      : { width: 840, height: 1188 };
+  }
+  return isLandscape
+    ? { width: 1120, height: 850 }
+    : { width: 850, height: 1120 };
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'light',
@@ -69,89 +85,116 @@ export function createStarterData(): { notebooks: Notebook[]; folders: Folder[] 
 
   const mathPage1: Page = {
     id: 'page_math_1',
-    title: 'Алгебра: Квадратные уравнения',
+    title: 'План проекта и заметки',
     order: 0,
-    width: 1400,
-    height: 1900,
+    width: 850,
+    height: 1120,
     background: {
       color: '#FFFFFF',
       type: 'grid',
-      gridSize: 25,
+      gridSize: 24,
       gridColor: '#E2E8F0',
       gridOpacity: 0.85,
       lineWidth: 1,
     },
     strokes: [
       {
-        id: 'stroke_math_title',
+        id: 'stroke_underline',
         tool: 'pen',
-        color: '#1E293B',
+        color: '#6355C7',
+        width: 3,
+        opacity: 0.9,
+        points: [
+          { x: 80, y: 390, pressure: 0.8 },
+          { x: 480, y: 390, pressure: 0.8 },
+        ],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: 'stroke_check',
+        tool: 'pen',
+        color: '#10B981',
         width: 3,
         opacity: 1,
         points: [
-          { x: 100, y: 150, pressure: 0.6 },
-          { x: 140, y: 148, pressure: 0.7 },
-          { x: 220, y: 152, pressure: 0.6 },
+          { x: 80, y: 560, pressure: 0.7 },
+          { x: 92, y: 575, pressure: 0.8 },
+          { x: 112, y: 550, pressure: 0.8 },
+        ],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: 'stroke_highlight',
+        tool: 'marker',
+        color: '#FEF08A',
+        width: 28,
+        opacity: 0.5,
+        points: [
+          { x: 80, y: 470, pressure: 1 },
+          { x: 520, y: 470, pressure: 1 },
         ],
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },
     ],
-    shapes: [
-      {
-        id: 'shape_box_1',
-        type: 'rect',
-        x: 80,
-        y: 200,
-        width: 620,
-        height: 150,
-        strokeColor: '#3B82F6',
-        strokeWidth: 2,
-        fillColor: 'rgba(59, 130, 246, 0.04)',
-        opacity: 1,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-    ],
+    shapes: [],
     texts: [
       {
-        id: 'text_math_title',
-        x: 90,
-        y: 90,
-        width: 600,
-        height: 48,
-        text: 'Тема: Решение квадратных уравнений',
-        fontSize: 26,
+        id: 'text_math_meta',
+        x: 80,
+        y: 300,
+        width: 400,
+        height: 24,
+        text: 'ПЛАН & ЗАМЕТКИ',
+        fontSize: 14,
         fontFamily: 'Inter, sans-serif',
-        color: '#0F172A',
+        color: '#6355C7',
         bold: true,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },
       {
-        id: 'text_math_formula',
-        x: 110,
-        y: 225,
-        width: 560,
-        height: 100,
-        text: 'Общий вид:  ax² + bx + c = 0\nДискриминант:  D = b² - 4ac\nКорни:  x₁,₂ = (-b ± √D) / (2a)',
-        fontSize: 20,
-        fontFamily: 'monospace',
+        id: 'text_math_title',
+        x: 80,
+        y: 335,
+        width: 600,
+        height: 44,
+        text: 'Рабочие заметки и наброски',
+        fontSize: 32,
+        fontFamily: 'Inter, sans-serif',
         color: '#1E293B',
         bold: true,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },
       {
-        id: 'text_note_sample',
-        x: 110,
-        y: 380,
-        width: 700,
+        id: 'text_sec1_body',
+        x: 80,
+        y: 430,
+        width: 600,
+        height: 120,
+        text: '1. Составить список ключевых задач\n2. Проверить пропорции рабочего листа\n3. Организовать тетради по темам',
+        fontSize: 18,
+        fontFamily: 'Inter, sans-serif',
+        color: '#1E293B',
+        bold: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: 'text_sec2_body',
+        x: 80,
+        y: 580,
+        width: 600,
         height: 80,
-        text: '• Если D > 0 — уравнение имеет 2 различных корня.\n• Если D = 0 — один корень кратности 2.\n• Если D < 0 — действительных корней нет.',
+        text: 'Идеи: добавить экспорт в векторный формат и синхронизацию.',
         fontSize: 16,
         fontFamily: 'Inter, sans-serif',
         color: '#475569',
+        bold: false,
+        italic: true,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },
@@ -165,12 +208,12 @@ export function createStarterData(): { notebooks: Notebook[]; folders: Folder[] 
     id: 'page_math_2',
     title: 'Геометрия: Теорема Пифагора',
     order: 1,
-    width: 1400,
-    height: 1900,
+    width: 850,
+    height: 1120,
     background: {
       color: '#FFFFFF',
       type: 'grid',
-      gridSize: 25,
+      gridSize: 24,
       gridColor: '#E2E8F0',
       gridOpacity: 0.85,
       lineWidth: 1,
@@ -231,12 +274,12 @@ export function createStarterData(): { notebooks: Notebook[]; folders: Folder[] 
     id: 'page_physics_1',
     title: 'Механика: Законы Ньютона',
     order: 0,
-    width: 1400,
-    height: 1900,
+    width: 850,
+    height: 1120,
     background: {
       color: '#FAF8F5',
       type: 'ruled',
-      gridSize: 28,
+      gridSize: 32,
       gridColor: '#E5E0D8',
       gridOpacity: 0.9,
       lineWidth: 1,
@@ -281,8 +324,8 @@ export function createStarterData(): { notebooks: Notebook[]; folders: Folder[] 
     id: 'page_ideas_1',
     title: 'Планы и архитектура проекта',
     order: 0,
-    width: 1400,
-    height: 1900,
+    width: 850,
+    height: 1120,
     background: {
       color: '#FFFFFF',
       type: 'dots',
@@ -327,42 +370,91 @@ export function createStarterData(): { notebooks: Notebook[]; folders: Folder[] 
     updatedAt: Date.now(),
   };
 
+  const notebook4Page: Page = {
+    id: 'page_nb4_1',
+    title: 'Страница 1',
+    order: 0,
+    width: 850,
+    height: 1120,
+    background: {
+      color: '#FFFFFF',
+      type: 'grid',
+      gridSize: 24,
+      gridColor: '#E2E8F0',
+      gridOpacity: 0.85,
+      lineWidth: 1,
+    },
+    strokes: [],
+    shapes: [],
+    texts: [
+      {
+        id: 'text_nb4_title',
+        x: 100,
+        y: 120,
+        width: 500,
+        height: 48,
+        text: 'Тетрадь 4: Личные заметки',
+        fontSize: 26,
+        fontFamily: 'Inter, sans-serif',
+        color: '#0F172A',
+        bold: true,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ],
+    images: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
   const notebooks: Notebook[] = [
     {
-      id: 'nb_math',
-      title: 'Математика',
-      folderId: 'folder_study',
-      coverColor: '#2563EB',
-      coverPattern: 'grid',
-      pages: [mathPage1, mathPage2],
-      currentPageId: 'page_math_1',
-      favorite: true,
-      createdAt: Date.now() - 3600 * 1000 * 24 * 2,
-      updatedAt: Date.now() - 3600 * 1000 * 2,
-    },
-    {
-      id: 'nb_physics',
-      title: 'Физика',
-      folderId: 'folder_study',
-      coverColor: '#059669',
-      coverPattern: 'stripes',
-      pages: [physicsPage],
-      currentPageId: 'page_physics_1',
+      id: 'nb_notebook4',
+      title: 'Тетрадь 4',
+      folderId: 'folder_personal',
+      coverColor: '#BBD6FA',
+      coverPattern: 'plain',
+      pages: [notebook4Page],
+      currentPageId: 'page_nb4_1',
       favorite: false,
-      createdAt: Date.now() - 3600 * 1000 * 24 * 5,
-      updatedAt: Date.now() - 3600 * 1000 * 12,
+      createdAt: Date.now() - 3600 * 1000 * 24 * 3,
+      updatedAt: Date.now() - 3600 * 1000 * 24 * 1,
     },
     {
       id: 'nb_ideas',
       title: 'Идеи & Заметки',
       folderId: 'folder_personal',
-      coverColor: '#7C3AED',
+      coverColor: '#D3C3F5',
       coverPattern: 'dots',
       pages: [ideasPage],
       currentPageId: 'page_ideas_1',
-      favorite: true,
+      favorite: false,
       createdAt: Date.now() - 3600 * 1000 * 24 * 1,
-      updatedAt: Date.now() - 1000 * 60 * 30,
+      updatedAt: Date.now() - 3600 * 1000 * 24 * 1,
+    },
+    {
+      id: 'nb_math',
+      title: 'Математика',
+      folderId: 'folder_study',
+      coverColor: '#BBD6FA',
+      coverPattern: 'grid',
+      pages: [mathPage1, mathPage2],
+      currentPageId: 'page_math_1',
+      favorite: true,
+      createdAt: Date.now() - 3600 * 1000 * 24 * 2,
+      updatedAt: Date.now() - 1000 * 60 * 15,
+    },
+    {
+      id: 'nb_physics',
+      title: 'Физика',
+      folderId: 'folder_study',
+      coverColor: '#A8DCD1',
+      coverPattern: 'stripes',
+      pages: [physicsPage],
+      currentPageId: 'page_physics_1',
+      favorite: false,
+      createdAt: Date.now() - 3600 * 1000 * 24 * 5,
+      updatedAt: Date.now() - 3600 * 1000 * 48,
     },
   ];
 
@@ -380,7 +472,14 @@ export async function dbGetAllNotebooks(): Promise<Notebook[]> {
       const store = tx.objectStore(STORE_NOTEBOOKS);
       const req = store.getAll();
       req.onsuccess = () => {
-        const list: Notebook[] = req.result || [];
+        const rawList: Notebook[] = req.result || [];
+        const list = rawList.map((nb) => ({
+          ...nb,
+          pages: nb.pages.map((p) => ({
+            ...p,
+            height: p.height > 1200 ? 1150 : (p.height || 1150),
+          })),
+        }));
         if (list.length === 0) {
           const starter = createStarterData();
           dbSaveAllNotebooks(starter.notebooks);
@@ -538,7 +637,16 @@ export function clearCrashSnapshot() {
 function fallbackLoadNotebooks(): Notebook[] {
   try {
     const raw = localStorage.getItem('noto_notebooks_backup');
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed: Notebook[] = JSON.parse(raw);
+      return parsed.map((nb) => ({
+        ...nb,
+        pages: nb.pages.map((p) => ({
+          ...p,
+          height: p.height > 1200 ? 1150 : (p.height || 1150),
+        })),
+      }));
+    }
   } catch {
     // ignore
   }

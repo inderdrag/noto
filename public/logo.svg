@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" width="320" height="80">
+  <g transform="translate(16, 12)">
+    <path d="M 8 50 V 27 C 8 16.5 16.5 8 27 8 C 37.5 8 46 16.5 46 27 V 50" fill="none" stroke="#6355C7" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <text x="82" y="55" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="44" font-weight="700" fill="#6355C7">Noto</text>
+</svg>

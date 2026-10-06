@@ -52,8 +52,14 @@ import {
   SelectionBox 
 } from '../types';
 import { renderPage, isColorDark, renderShape } from '../drawing-engine/renderer';
-import { strokeIntersectsCircle, sliceStrokeByEraser, pointInRect, smoothPoints, getStrokeBounds, getShapeBounds } from '../drawing-engine/math';
+import { strokeIntersectsCircle, sliceStrokeByEraser, pointInRect, smoothPoints, getStrokeBounds, getShapeBounds, distance } from '../drawing-engine/math';
 import { exportNotebookToPdf, exportPageAsImage, exportToNotoFile } from '../export/exporter';
+import { NotoIcon } from './NotoLogo';
+import { EditorHeader } from './editor/EditorHeader';
+import { PagesSidebar } from './editor/PagesSidebar';
+import { ToolSidebar } from './editor/ToolSidebar';
+import { FloatingToolbar } from './editor/FloatingToolbar';
+import { getStandardPageDimensions } from '../storage/db';
 
 interface EditorWorkspaceProps {
   notebook: Notebook;
@@ -61,6 +67,11 @@ interface EditorWorkspaceProps {
   onUpdateNotebook: (updated: Notebook) => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  zoomAction?: { type: 'in' | 'out' | 'reset'; timestamp: number } | null;
+  undoTrigger?: number;
+  redoTrigger?: number;
+  clearPageTrigger?: number;
+  paperTypeTrigger?: { type: GridType; timestamp: number } | null;
 }
 
 const PRESET_STROKE_SIZES = [1, 2, 3, 5, 8, 12, 20, 30];
@@ -121,6 +132,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   onUpdateNotebook,
   theme,
   onToggleTheme,
+  zoomAction,
+  undoTrigger,
+  redoTrigger,
+  clearPageTrigger,
+  paperTypeTrigger,
 }) => {
   const isDark = theme === 'dark';
   const currentPageIndex = Math.max(
@@ -170,6 +186,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   const [isCoverPopoverOpen, setIsCoverPopoverOpen] = useState(false);
   const [isZoomMenuOpen, setIsZoomMenuOpen] = useState(false);
 
+  // Responsive 3-pane layout states matching the design mockup
+  const [isPagesSidebarOpen, setIsPagesSidebarOpen] = useState(true);
+  const [isToolSidebarOpen, setIsToolSidebarOpen] = useState(true);
+  const [isSheetFullscreen, setIsSheetFullscreen] = useState(false);
+
   const [isPagesDrawerOpen, setIsPagesDrawerOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -184,15 +205,98 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   const startPointRef = useRef<Point | null>(null);
   const eraserPreviewRef = useRef<{ x: number; y: number; radius: number } | null>(null);
 
-  // Selection Tool State & Dragging
+  // Selection Tool State & Interactive Dragging / Resizing
+  type SelectionHandle = 'nw' | 'ne' | 'se' | 'sw' | 'inside' | null;
+
+  interface SelectionTransformState {
+    handle: 'nw' | 'ne' | 'se' | 'sw' | 'inside';
+    startPt: Point;
+    initialBox: SelectionBox;
+    initialStrokes: Stroke[];
+    initialShapes: Shape[];
+    initialTexts: TextObject[];
+  }
+
   const [selectedIds, setSelectedIds] = useState<{
     strokeIds: string[];
     shapeIds: string[];
     textIds: string[];
   }>({ strokeIds: [], shapeIds: [], textIds: [] });
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
-  const isDraggingSelectionRef = useRef(false);
-  const dragSelectionStartRef = useRef<Point | null>(null);
+  const [isSelectionColorPickerOpen, setIsSelectionColorPickerOpen] = useState(false);
+  const [selectionCursor, setSelectionCursor] = useState<string>('crosshair');
+  const selectionTransformRef = useRef<SelectionTransformState | null>(null);
+
+  const getSelectionHitHandle = (pt: Point, sel: SelectionBox, tolerance: number = 14): SelectionHandle => {
+    if (!sel || sel.width <= 0 || sel.height <= 0) return null;
+    const nw = { x: sel.x, y: sel.y };
+    const ne = { x: sel.x + sel.width, y: sel.y };
+    const se = { x: sel.x + sel.width, y: sel.y + sel.height };
+    const sw = { x: sel.x, y: sel.y + sel.height };
+
+    if (distance(pt, nw) <= tolerance) return 'nw';
+    if (distance(pt, ne) <= tolerance) return 'ne';
+    if (distance(pt, se) <= tolerance) return 'se';
+    if (distance(pt, sw) <= tolerance) return 'sw';
+
+    if (pointInRect(pt, sel)) return 'inside';
+
+    return null;
+  };
+
+  const computeBoundingBoxForItems = (
+    sIds: string[],
+    shIds: string[],
+    tIds: string[],
+    page: Page
+  ): SelectionBox | null => {
+    if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    const selStrokes = (page.strokes || []).filter((s) => sIds.includes(s.id));
+    selStrokes.forEach((s) => {
+      s.points.forEach((p) => {
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+      });
+    });
+
+    const selShapes = (page.shapes || []).filter((sh) => shIds.includes(sh.id));
+    selShapes.forEach((sh) => {
+      const x2 = sh.x + sh.width;
+      const y2 = sh.y + sh.height;
+      minX = Math.min(minX, Math.min(sh.x, x2));
+      minY = Math.min(minY, Math.min(sh.y, y2));
+      maxX = Math.max(maxX, Math.max(sh.x, x2));
+      maxY = Math.max(maxY, Math.max(sh.y, y2));
+    });
+
+    const selTexts = (page.texts || []).filter((t) => tIds.includes(t.id));
+    selTexts.forEach((t) => {
+      const w = t.width || Math.max(80, t.text.length * (t.fontSize * 0.6));
+      const h = t.height || t.fontSize * 1.5;
+      minX = Math.min(minX, t.x);
+      minY = Math.min(minY, t.y);
+      maxX = Math.max(maxX, t.x + w);
+      maxY = Math.max(maxY, t.y + h);
+    });
+
+    if (minX === Infinity || maxX === -Infinity) return null;
+
+    const pad = 10;
+    return {
+      x: Math.max(0, minX - pad),
+      y: Math.max(0, minY - pad),
+      width: Math.max(20, maxX - minX + pad * 2),
+      height: Math.max(20, maxY - minY + pad * 2),
+      strokeIds: sIds,
+      shapeIds: shIds,
+      textIds: tIds,
+      imageIds: [],
+    };
+  };
 
   // Close all popovers helper
   const closeAllPopovers = useCallback(() => {
@@ -202,6 +306,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setIsZoomMenuOpen(false);
     setShowToolOptions(false);
     setIsPagesDrawerOpen(false);
+    setIsSelectionColorPickerOpen(false);
   }, []);
 
   // Global click outside popovers to close them automatically
@@ -219,33 +324,25 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     return () => window.removeEventListener('pointerdown', handleGlobalPointerDown);
   }, [closeAllPopovers]);
 
-  // Auto-expand canvas width to 2200px and height to 7500px for vast horizontal room
-  useEffect(() => {
-    if (currentPage.width < 2000) {
-      updateCurrentPage((page) => ({
-        ...page,
-        width: 2200,
-        height: Math.max(7500, page.height),
-      }));
-    }
-  }, [currentPage.id, currentPage.width]);
-
-  // Default zoom 70% when entering the sheet / page as requested
+  // Default zoom & centering when opening page
   useEffect(() => {
     const initPageZoom = () => {
-      const vWidth = window.innerWidth;
-      const defaultScale = 0.70;
+      const canvas = canvasRef.current;
+      const vWidth = canvas ? canvas.clientWidth : window.innerWidth - 380;
+      const vHeight = canvas ? canvas.clientHeight : window.innerHeight - 160;
+      const defaultScale = Math.min(0.75, Math.max(0.45, (vWidth - 60) / currentPage.width));
       setScale(defaultScale);
 
       const renderW = currentPage.width * defaultScale;
+      const renderH = currentPage.height * defaultScale;
       setPan({
-        x: Math.max(16, (vWidth - renderW) / 2),
-        y: 28,
+        x: Math.max(20, (vWidth - renderW) / 2),
+        y: Math.max(20, (vHeight - renderH) / 2),
       });
     };
 
     initPageZoom();
-  }, [currentPage.id]);
+  }, [currentPage.id, currentPage.width, currentPage.height]);
 
   // History recorder
   const pushHistory = useCallback(
@@ -318,7 +415,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       texts: nextEntry.texts,
       images: nextEntry.images,
     }));
-    setHistoryIndex((prev) => prev - 1);
+    setHistoryIndex((prev) => prev + 1);
   }, [history, historyIndex, updateCurrentPage]);
 
   useEffect(() => {
@@ -347,33 +444,40 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     ctx.scale(dpr, dpr);
 
     // 1. Contrasting studio desk background
-    ctx.fillStyle = theme === 'dark' ? '#090A0D' : '#E2E8F0';
+    ctx.fillStyle = theme === 'dark' ? '#0E0F17' : '#F7F8FC';
     ctx.fillRect(0, 0, displayWidth, displayHeight);
 
     ctx.translate(pan.x, pan.y);
     ctx.scale(scale, scale);
 
     const darkPaper = isColorDark(currentPage.background.color);
+    const cornerRadius = 12;
 
-    // 2. Physical paper sheet boundaries & drop-shadow
+    // 2. Physical paper sheet boundaries & drop-shadow with rounded corners
     ctx.save();
-    ctx.shadowColor = theme === 'dark' ? 'rgba(0, 0, 0, 0.85)' : 'rgba(0, 0, 0, 0.16)';
+    ctx.shadowColor = theme === 'dark' ? 'rgba(0, 0, 0, 0.6)' : 'rgba(99, 85, 199, 0.08)';
     ctx.shadowBlur = 24 / scale;
-    ctx.shadowOffsetY = 8 / scale;
+    ctx.shadowOffsetY = 6 / scale;
     ctx.fillStyle = currentPage.background.color;
-    ctx.fillRect(0, 0, currentPage.width, currentPage.height);
+    ctx.beginPath();
+    ctx.roundRect(0, 0, currentPage.width, currentPage.height, cornerRadius);
+    ctx.fill();
     ctx.restore();
 
-    // 3. Crisp sheet boundary outline: clearly visible on both light and midnight dark paper
+    // 3. Crisp sheet boundary outline
     ctx.save();
-    if (darkPaper) {
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)'; // Gentle, clear border around midnight paper
-    } else {
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.16)'; // Crisp border around white paper
-    }
-    ctx.lineWidth = Math.max(1, 1.2 / scale);
-    ctx.strokeRect(0, 0, currentPage.width, currentPage.height);
+    ctx.strokeStyle = darkPaper ? 'rgba(255, 255, 255, 0.16)' : 'rgba(0, 0, 0, 0.08)';
+    ctx.lineWidth = Math.max(1, 1 / scale);
+    ctx.beginPath();
+    ctx.roundRect(0, 0, currentPage.width, currentPage.height, cornerRadius);
+    ctx.stroke();
     ctx.restore();
+
+    // 4. Clip to rounded sheet so grid & drawings stay cleanly within rounded paper
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(0, 0, currentPage.width, currentPage.height, cornerRadius);
+    ctx.clip();
 
     // 4. Render page contents (strictly bounded within the sheet)
     renderPage(ctx, currentPage, {
@@ -392,7 +496,8 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       });
     }
 
-    ctx.restore();
+    ctx.restore(); // restore clip
+    ctx.restore(); // restore pan/scale
   }, [currentPage, pan, scale, selectionBox, theme]);
 
   useEffect(() => {
@@ -482,6 +587,54 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setIsZoomMenuOpen(false);
   };
 
+  // Fullscreen sheet mode toggle: collapses sidebars and zooms sheet to 100%
+  const toggleSheetFullscreen = () => {
+    if (!isSheetFullscreen) {
+      setIsSheetFullscreen(true);
+      setIsPagesSidebarOpen(false);
+      setIsToolSidebarOpen(false);
+      const canvas = canvasRef.current;
+      const vWidth = canvas ? canvas.clientWidth : window.innerWidth;
+      const scale100 = 1.0;
+      setScale(scale100);
+      setPan({
+        x: Math.max(20, (vWidth - currentPage.width * scale100) / 2),
+        y: 28,
+      });
+    } else {
+      setIsSheetFullscreen(false);
+      setIsPagesSidebarOpen(true);
+      setIsToolSidebarOpen(true);
+      const canvas = canvasRef.current;
+      const vWidth = canvas ? canvas.clientWidth : window.innerWidth - 380;
+      const defaultScale = 0.70;
+      setScale(defaultScale);
+      setPan({
+        x: Math.max(20, (vWidth - currentPage.width * defaultScale) / 2),
+        y: 28,
+      });
+    }
+  };
+
+  const isLandscape = currentPage.width > currentPage.height;
+  const togglePageOrientation = () => {
+    const isLand = currentPage.width > currentPage.height;
+    const nextLand = !isLand;
+    const dim = getStandardPageDimensions(currentPage.background.type, nextLand);
+    updateCurrentPage((page) => ({
+      ...page,
+      width: dim.width,
+      height: dim.height,
+    }), 'Смена ориентации листа');
+
+    const canvas = canvasRef.current;
+    const vWidth = canvas ? canvas.clientWidth : window.innerWidth - 380;
+    setPan({
+      x: Math.max(20, (vWidth - dim.width * scale) / 2),
+      y: 28,
+    });
+  };
+
   // Clear entire canvas (with Undo support)
   const handleClearCanvas = () => {
     if (
@@ -502,6 +655,56 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
     setSelectionBox(null);
   };
+
+  const handleSetPaperType = (newType: GridType) => {
+    const isLand = currentPage.width > currentPage.height;
+    const dim = getStandardPageDimensions(newType, isLand);
+    updateCurrentPage((page) => ({
+      ...page,
+      width: dim.width,
+      height: dim.height,
+      background: {
+        ...page.background,
+        type: newType,
+      },
+    }), 'Смена разлиновки листа');
+  };
+
+  // External MenuBar triggers
+  useEffect(() => {
+    if (!zoomAction) return;
+    if (zoomAction.type === 'in') {
+      handleZoomDelta(1.15);
+    } else if (zoomAction.type === 'out') {
+      handleZoomDelta(0.85);
+    } else if (zoomAction.type === 'reset') {
+      handleResetZoom();
+    }
+  }, [zoomAction]);
+
+  useEffect(() => {
+    if (undoTrigger) {
+      handleUndo();
+    }
+  }, [undoTrigger, handleUndo]);
+
+  useEffect(() => {
+    if (redoTrigger) {
+      handleRedo();
+    }
+  }, [redoTrigger, handleRedo]);
+
+  useEffect(() => {
+    if (clearPageTrigger) {
+      handleClearCanvas();
+    }
+  }, [clearPageTrigger]);
+
+  useEffect(() => {
+    if (paperTypeTrigger) {
+      handleSetPaperType(paperTypeTrigger.type);
+    }
+  }, [paperTypeTrigger]);
 
   // Selection actions: Delete, Duplicate, Recolor
   const handleDeleteSelected = () => {
@@ -550,29 +753,50 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       texts: [...(page.texts || []), ...newTexts],
     }), 'Дублировать выделенное');
 
+    // Deselect after copying so the selection clears automatically
+    setSelectionBox(null);
     setSelectedIds({
-      strokeIds: newStrokes.map((s) => s.id),
-      shapeIds: newShapes.map((s) => s.id),
-      textIds: newTexts.map((t) => t.id),
+      strokeIds: [],
+      shapeIds: [],
+      textIds: [],
     });
-
-    if (selectionBox) {
-      setSelectionBox({
-        ...selectionBox,
-        x: selectionBox.x + offset,
-        y: selectionBox.y + offset,
-      });
-    }
+    setIsSelectionColorPickerOpen(false);
   };
 
-  const handleRecolorSelected = () => {
-    if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0) return;
+  const handleRecolorSelected = (colorToApply?: string) => {
+    const c = colorToApply || strokeColor;
+    let sIds = selectedIds.strokeIds;
+    let shIds = selectedIds.shapeIds;
+    let tIds = selectedIds.textIds;
+
+    // Fallback if selectionBox exists but selectedIds was empty
+    if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0 && selectionBox) {
+      sIds = (currentPage.strokes || [])
+        .filter((s) => s.points.some((p) => pointInRect(p, selectionBox)))
+        .map((s) => s.id);
+      shIds = (currentPage.shapes || [])
+        .filter((sh) => pointInRect({ x: sh.x, y: sh.y }, selectionBox))
+        .map((sh) => sh.id);
+      tIds = (currentPage.texts || [])
+        .filter((t) => pointInRect({ x: t.x, y: t.y }, selectionBox))
+        .map((t) => t.id);
+    }
+
+    if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0) return;
+
     updateCurrentPage((page) => ({
       ...page,
-      strokes: (page.strokes || []).map((s) => selectedIds.strokeIds.includes(s.id) ? { ...s, color: strokeColor } : s),
-      shapes: (page.shapes || []).map((s) => selectedIds.shapeIds.includes(s.id) ? { ...s, strokeColor: strokeColor } : s),
-      texts: (page.texts || []).map((t) => selectedIds.textIds.includes(t.id) ? { ...t, color: strokeColor } : t),
+      strokes: (page.strokes || []).map((s) => sIds.includes(s.id) ? { ...s, color: c } : s),
+      shapes: (page.shapes || []).map((sh) => shIds.includes(sh.id) ? { ...sh, strokeColor: c } : sh),
+      texts: (page.texts || []).map((t) => tIds.includes(t.id) ? { ...t, color: c } : t),
     }), 'Перекрасить выделенное');
+
+    setSelectedIds({
+      strokeIds: sIds,
+      shapeIds: shIds,
+      textIds: tIds,
+    });
+    setStrokeColor(c);
   };
 
   // Pointer Down
@@ -598,12 +822,31 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
     startPointRef.current = pt;
 
-    // Selection move handling
-    if (activeTool === 'select' && selectionBox) {
-      const inBox = pointInRect(pt, selectionBox);
-      if (inBox && (selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0)) {
-        isDraggingSelectionRef.current = true;
-        dragSelectionStartRef.current = pt;
+    // Selection move or corner resize handling
+    if (activeTool === 'select' && selectionBox && (selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0)) {
+      const hitTolerance = Math.max(12, 16 / scale);
+      const handle = getSelectionHitHandle(pt, selectionBox, hitTolerance);
+
+      if (handle) {
+        // Create deep snapshot of selected items for smooth relative scaling / moving
+        const initialStrokes = (currentPage.strokes || [])
+          .filter((s) => selectedIds.strokeIds.includes(s.id))
+          .map((s) => ({ ...s, points: s.points.map((p) => ({ ...p })) }));
+        const initialShapes = (currentPage.shapes || [])
+          .filter((sh) => selectedIds.shapeIds.includes(sh.id))
+          .map((sh) => ({ ...sh }));
+        const initialTexts = (currentPage.texts || [])
+          .filter((t) => selectedIds.textIds.includes(t.id))
+          .map((t) => ({ ...t }));
+
+        selectionTransformRef.current = {
+          handle,
+          startPt: pt,
+          initialBox: { ...selectionBox },
+          initialStrokes,
+          initialShapes,
+          initialTexts,
+        };
         return;
       }
     }
@@ -686,33 +929,145 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
     if (!isPointerDownRef.current) return;
 
-    // Dragging active selection
-    if (isDraggingSelectionRef.current && dragSelectionStartRef.current && selectionBox) {
-      const dx = pt.x - dragSelectionStartRef.current.x;
-      const dy = pt.y - dragSelectionStartRef.current.y;
-      dragSelectionStartRef.current = pt;
+    // 1. Transforming selection (Moving via center or Resizing via corner handles)
+    if (selectionTransformRef.current) {
+      const { handle, startPt, initialBox, initialStrokes, initialShapes, initialTexts } = selectionTransformRef.current;
 
-      setSelectionBox((prev) => prev ? { ...prev, x: prev.x + dx, y: prev.y + dy } : null);
+      if (handle === 'inside') {
+        // Move / Перенос
+        const dx = pt.x - startPt.x;
+        const dy = pt.y - startPt.y;
+        const newBox = { ...initialBox, x: initialBox.x + dx, y: initialBox.y + dy };
+        setSelectionBox(newBox);
 
-      updateCurrentPage((page) => ({
-        ...page,
-        strokes: (page.strokes || []).map((s) => {
-          if (!selectedIds.strokeIds.includes(s.id)) return s;
-          return {
-            ...s,
-            points: s.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
-          };
-        }),
-        shapes: (page.shapes || []).map((sh) => {
-          if (!selectedIds.shapeIds.includes(sh.id)) return sh;
-          return { ...sh, x: sh.x + dx, y: sh.y + dy };
-        }),
-        texts: (page.texts || []).map((t) => {
-          if (!selectedIds.textIds.includes(t.id)) return t;
-          return { ...t, x: t.x + dx, y: t.y + dy };
-        }),
-      }));
-      return;
+        const selStrokeMap = new Map(initialStrokes.map((s) => [s.id, s]));
+        const selShapeMap = new Map(initialShapes.map((sh) => [sh.id, sh]));
+        const selTextMap = new Map(initialTexts.map((t) => [t.id, t]));
+
+        updateCurrentPage((page) => ({
+          ...page,
+          strokes: (page.strokes || []).map((s) => {
+            const orig = selStrokeMap.get(s.id);
+            if (!orig) return s;
+            return {
+              ...s,
+              points: orig.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
+            };
+          }),
+          shapes: (page.shapes || []).map((sh) => {
+            const orig = selShapeMap.get(sh.id);
+            if (!orig) return sh;
+            return { ...sh, x: orig.x + dx, y: orig.y + dy };
+          }),
+          texts: (page.texts || []).map((t) => {
+            const orig = selTextMap.get(t.id);
+            if (!orig) return t;
+            return { ...t, x: orig.x + dx, y: orig.y + dy };
+          }),
+        }));
+        return;
+      } else {
+        // Corner Resize / Масштабирование и увеличение
+        let newX = initialBox.x;
+        let newY = initialBox.y;
+        let newW = initialBox.width;
+        let newH = initialBox.height;
+
+        if (handle === 'se') {
+          newX = initialBox.x;
+          newY = initialBox.y;
+          newW = Math.max(20, pt.x - initialBox.x);
+          newH = Math.max(20, pt.y - initialBox.y);
+        } else if (handle === 'sw') {
+          const right = initialBox.x + initialBox.width;
+          newX = Math.min(right - 20, pt.x);
+          newY = initialBox.y;
+          newW = right - newX;
+          newH = Math.max(20, pt.y - initialBox.y);
+        } else if (handle === 'ne') {
+          const bottom = initialBox.y + initialBox.height;
+          newX = initialBox.x;
+          newY = Math.min(bottom - 20, pt.y);
+          newW = Math.max(20, pt.x - initialBox.x);
+          newH = bottom - newY;
+        } else if (handle === 'nw') {
+          const right = initialBox.x + initialBox.width;
+          const bottom = initialBox.y + initialBox.height;
+          newX = Math.min(right - 20, pt.x);
+          newY = Math.min(bottom - 20, pt.y);
+          newW = right - newX;
+          newH = bottom - newY;
+        }
+
+        const scaleX = initialBox.width > 0 ? newW / initialBox.width : 1;
+        const scaleY = initialBox.height > 0 ? newH / initialBox.height : 1;
+        const uniformScale = Math.sqrt(Math.abs(scaleX * scaleY));
+
+        setSelectionBox({ ...initialBox, x: newX, y: newY, width: newW, height: newH });
+
+        const selStrokeMap = new Map(initialStrokes.map((s) => [s.id, s]));
+        const selShapeMap = new Map(initialShapes.map((sh) => [sh.id, sh]));
+        const selTextMap = new Map(initialTexts.map((t) => [t.id, t]));
+
+        updateCurrentPage((page) => ({
+          ...page,
+          strokes: (page.strokes || []).map((s) => {
+            const orig = selStrokeMap.get(s.id);
+            if (!orig) return s;
+            return {
+              ...s,
+              width: Math.max(1, orig.width * uniformScale),
+              points: orig.points.map((p) => ({
+                ...p,
+                x: newX + (p.x - initialBox.x) * scaleX,
+                y: newY + (p.y - initialBox.y) * scaleY,
+              })),
+            };
+          }),
+          shapes: (page.shapes || []).map((sh) => {
+            const orig = selShapeMap.get(sh.id);
+            if (!orig) return sh;
+            return {
+              ...sh,
+              x: newX + (orig.x - initialBox.x) * scaleX,
+              y: newY + (orig.y - initialBox.y) * scaleY,
+              width: orig.width * scaleX,
+              height: orig.height * scaleY,
+              strokeWidth: Math.max(1, orig.strokeWidth * uniformScale),
+            };
+          }),
+          texts: (page.texts || []).map((t) => {
+            const orig = selTextMap.get(t.id);
+            if (!orig) return t;
+            return {
+              ...t,
+              x: newX + (orig.x - initialBox.x) * scaleX,
+              y: newY + (orig.y - initialBox.y) * scaleY,
+              fontSize: Math.max(8, Math.round(orig.fontSize * uniformScale)),
+              width: orig.width ? orig.width * scaleX : orig.width,
+              height: orig.height ? orig.height * scaleY : orig.height,
+            };
+          }),
+        }));
+        return;
+      }
+    }
+
+    // Update dynamic cursor when hovering over active selection box
+    if (activeTool === 'select' && selectionBox && !isPointerDownRef.current) {
+      const hitTolerance = Math.max(12, 16 / scale);
+      const h = getSelectionHitHandle(pt, selectionBox, hitTolerance);
+      if (h === 'nw' || h === 'se') {
+        setSelectionCursor('nwse-resize');
+      } else if (h === 'ne' || h === 'sw') {
+        setSelectionCursor('nesw-resize');
+      } else if (h === 'inside') {
+        setSelectionCursor('move');
+      } else {
+        setSelectionCursor('crosshair');
+      }
+    } else if (selectionCursor !== 'crosshair' && !isPointerDownRef.current) {
+      setSelectionCursor('crosshair');
     }
 
     if (activeStrokeRef.current) {
@@ -804,24 +1159,33 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Pointer Up
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (isPanning) {
-      setIsPanning(false);
-      return;
-    }
-
-    if (isDraggingSelectionRef.current) {
-      isDraggingSelectionRef.current = false;
-      pushHistory('Переместить выделенное');
-      return;
-    }
-
-    if (!isPointerDownRef.current) return;
     isPointerDownRef.current = false;
+    startPointRef.current = null;
 
     try {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
       // ignore
+    }
+
+    if (isPanning) {
+      setIsPanning(false);
+      return;
+    }
+
+    if (selectionTransformRef.current) {
+      const handle = selectionTransformRef.current.handle;
+      selectionTransformRef.current = null;
+      pushHistory(handle === 'inside' ? 'Переместить выделенное' : 'Масштабировать выделенное');
+
+      // Update selection bounding box to snuggly fit transformed items
+      if (selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0) {
+        const tightBox = computeBoundingBoxForItems(selectedIds.strokeIds, selectedIds.shapeIds, selectedIds.textIds, currentPage);
+        if (tightBox) {
+          setSelectionBox(tightBox);
+        }
+      }
+      return;
     }
 
     if (activeStrokeRef.current) {
@@ -848,9 +1212,10 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
 
     if (activeTool === 'select' && selectionBox) {
-      if (selectionBox.width < 5 && selectionBox.height < 5) {
+      if (selectionBox.width < 8 && selectionBox.height < 8) {
         setSelectionBox(null);
         setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+        setIsSelectionColorPickerOpen(false);
       } else {
         const selRect = selectionBox;
         const matchedStrokes = (currentPage.strokes || [])
@@ -863,11 +1228,21 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           .filter((t) => pointInRect({ x: t.x, y: t.y }, selRect))
           .map((t) => t.id);
 
-        setSelectedIds({
-          strokeIds: matchedStrokes,
-          shapeIds: matchedShapes,
-          textIds: matchedTexts,
-        });
+        if (matchedStrokes.length === 0 && matchedShapes.length === 0 && matchedTexts.length === 0) {
+          setSelectionBox(null);
+          setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+          setIsSelectionColorPickerOpen(false);
+        } else {
+          setSelectedIds({
+            strokeIds: matchedStrokes,
+            shapeIds: matchedShapes,
+            textIds: matchedTexts,
+          });
+          const tightBox = computeBoundingBoxForItems(matchedStrokes, matchedShapes, matchedTexts, currentPage);
+          if (tightBox) {
+            setSelectionBox(tightBox);
+          }
+        }
       }
     }
   };
@@ -1070,12 +1445,14 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   };
 
   const handleAddPage = () => {
+    const isLand = currentPage.width > currentPage.height;
+    const dim = getStandardPageDimensions(currentPage.background.type, isLand);
     const newPage: Page = {
       id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       title: `Страница ${notebook.pages.length + 1}`,
       order: notebook.pages.length,
-      width: currentPage.width || 2200,
-      height: currentPage.height || 7500,
+      width: dim.width,
+      height: dim.height,
       background: { ...currentPage.background },
       strokes: [],
       shapes: [],
@@ -1104,1307 +1481,833 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   return (
     <div className={`flex-1 flex flex-col overflow-hidden font-sans select-none relative w-full h-full transition-colors ${
-      isDark ? 'bg-[#0E0F14]' : 'bg-[#F1F5F9]'
+      isDark ? 'bg-[#0E0F14]' : 'bg-[#F7F8FC]'
     }`}>
-      {/* 1. Unified, Modern Studio Top Bar */}
-      <header className="absolute top-3 left-4 right-4 z-30 pointer-events-none flex items-center justify-between gap-4">
-        {/* Left Section: Back, Title, Manual Save, Clear Canvas */}
-        <div className={`pointer-events-auto flex items-center gap-2 backdrop-blur-xl px-3.5 py-1.5 rounded-2xl border shadow-md ${
-          isDark 
-            ? 'bg-[#12131A]/95 border-neutral-700/80 text-white' 
-            : 'bg-white/95 border-neutral-200 text-neutral-900'
-        }`}>
-          <button
-            onClick={onBackToLibrary}
-            className={`p-1.5 rounded-xl transition-all ${
-              isDark 
-                ? 'text-neutral-200 hover:text-white hover:bg-neutral-800' 
-                : 'text-neutral-700 hover:text-black hover:bg-neutral-100 bg-white border border-neutral-200 shadow-2xs'
+      {/* 1. Studio Header matching Image 2 */}
+      <EditorHeader
+        notebook={notebook}
+        currentPage={currentPage}
+        currentPageIndex={currentPageIndex}
+        totalPages={notebook.pages.length}
+        currentRulingName={currentRulingName}
+        isSheetFullscreen={isSheetFullscreen}
+        theme={theme}
+        saveSuccessFeedback={saveSuccessFeedback}
+        onBackToLibrary={onBackToLibrary}
+        onPrevPage={handlePrevPage}
+        onNextPage={handleNextPage}
+        onAddPage={handleAddPage}
+        onClearPage={handleClearCanvas}
+        onToggleSheetFullscreen={toggleSheetFullscreen}
+        onToggleTheme={onToggleTheme}
+        onOpenExportModal={() => setIsExportModalOpen(true)}
+        onOpenRulingPopover={() => {
+          setIsRulingPopoverOpen(!isRulingPopoverOpen);
+          setIsPaperColorPopoverOpen(false);
+          setIsCoverPopoverOpen(false);
+        }}
+        onOpenPaperColorPopover={() => {
+          setIsPaperColorPopoverOpen(!isPaperColorPopoverOpen);
+          setIsRulingPopoverOpen(false);
+          setIsCoverPopoverOpen(false);
+        }}
+        onOpenCoverPopover={() => {
+          setIsCoverPopoverOpen(!isCoverPopoverOpen);
+          setIsRulingPopoverOpen(false);
+          setIsPaperColorPopoverOpen(false);
+        }}
+        isEditingTitle={isEditingTitle}
+        titleInput={titleInput}
+        onStartEditingTitle={() => setIsEditingTitle(true)}
+        onChangeTitleInput={setTitleInput}
+        onSubmitTitle={() => {
+          if (titleInput.trim()) onUpdateNotebook({ ...notebook, title: titleInput.trim() });
+          setIsEditingTitle(false);
+        }}
+      />
+
+      {/* 2. Three-Pane Workspace Layout */}
+      <div className="flex-1 flex overflow-hidden relative w-full h-full">
+        {/* Left: Pages Sidebar */}
+        <PagesSidebar
+          notebook={notebook}
+          currentPageId={currentPage.id}
+          isOpen={isPagesSidebarOpen && !isSheetFullscreen}
+          theme={theme}
+          onToggleOpen={() => setIsPagesSidebarOpen(!isPagesSidebarOpen)}
+          onSelectPage={(pageId) => onUpdateNotebook({ ...notebook, currentPageId: pageId })}
+          onAddPage={handleAddPage}
+          onDeletePage={(pageId) => {
+            const remaining = notebook.pages.filter((pg) => pg.id !== pageId);
+            onUpdateNotebook({
+              ...notebook,
+              pages: remaining,
+              currentPageId: remaining[0].id,
+            });
+          }}
+        />
+
+        {/* Center: Main Canvas Sheet Viewport */}
+        <main className="flex-1 relative overflow-hidden flex flex-col items-center justify-center">
+          {/* Top Floating Pill Toolbar */}
+          <FloatingToolbar
+            activeTool={activeTool}
+            showToolOptions={showToolOptions}
+            eraserMode={eraserMode}
+            eraserRadius={eraserRadius}
+            historyIndex={historyIndex}
+            historyLength={history.length}
+            theme={theme}
+            onSelectTool={(tool) => {
+              setActiveTool(tool);
+              if (tool !== 'select') {
+                setSelectionBox(null);
+                setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+                setIsSelectionColorPickerOpen(false);
+              }
+              if (!isToolSidebarOpen && !isSheetFullscreen) {
+                setIsToolSidebarOpen(true);
+              }
+            }}
+            onToggleToolOptions={() => setShowToolOptions(!showToolOptions)}
+            onSetEraserMode={setEraserMode}
+            onSetEraserRadius={setEraserRadius}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onInsertImageClick={() => {
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = 'image/*';
+              input.onchange = (e) => {
+                const f = (e.target as HTMLInputElement).files?.[0];
+                if (f) insertImageFile(f);
+              };
+              input.click();
+            }}
+          />
+
+          {/* Interactive Canvas on Desk */}
+          <canvas
+            ref={canvasRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onWheel={handleWheel}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            className={`w-full h-full touch-none block absolute inset-0 ${
+              isPanning
+                ? 'cursor-grabbing'
+                : isSpacePressed || activeTool === 'pan'
+                ? 'cursor-grab active:cursor-grabbing'
+                : activeTool === 'select'
+                ? selectionTransformRef.current?.handle === 'inside'
+                  ? 'cursor-grabbing'
+                  : selectionTransformRef.current
+                  ? selectionTransformRef.current.handle === 'nw' || selectionTransformRef.current.handle === 'se'
+                    ? 'cursor-nwse-resize'
+                    : 'cursor-nesw-resize'
+                  : selectionCursor === 'move'
+                  ? 'cursor-move'
+                  : selectionCursor === 'nwse-resize'
+                  ? 'cursor-nwse-resize'
+                  : selectionCursor === 'nesw-resize'
+                  ? 'cursor-nesw-resize'
+                  : 'cursor-crosshair'
+                : activeTool === 'eraser'
+                ? 'cursor-crosshair'
+                : 'cursor-crosshair'
             }`}
-            title="Библиотека тетрадей"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
+          />
 
-          <div className={`w-px h-4 mx-0.5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-          {/* Editable Title */}
-          {isEditingTitle ? (
-            <input
-              type="text"
-              autoFocus
-              value={titleInput}
-              onBlur={() => {
-                if (titleInput.trim()) onUpdateNotebook({ ...notebook, title: titleInput.trim() });
-                setIsEditingTitle(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  if (titleInput.trim()) onUpdateNotebook({ ...notebook, title: titleInput.trim() });
-                  setIsEditingTitle(false);
-                }
-              }}
-              onChange={(e) => setTitleInput(e.target.value)}
-              className={`text-xs font-bold px-2 py-0.5 rounded-lg border focus:outline-none ${
-                isDark 
-                  ? 'bg-neutral-800 border-blue-500 text-white' 
-                  : 'bg-white border-blue-500 text-neutral-950 shadow-2xs'
+          {/* Floating Selection Toolbar (when elements are selected) */}
+          {selectionBox && hasSelectedItems && (
+            <div
+              data-popover="true"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              className={`absolute z-40 border rounded-2xl shadow-2xl px-3 py-1.5 flex items-center gap-2 text-xs font-bold animate-in fade-in zoom-in-95 duration-100 ${
+                isDark
+                  ? 'bg-[#181922] border-neutral-700 text-white'
+                  : 'bg-white border-neutral-200 text-neutral-900'
               }`}
-            />
-          ) : (
-            <button
-              onClick={() => setIsEditingTitle(true)}
-              className={`text-xs font-bold hover:underline truncate max-w-[140px] sm:max-w-[200px] ${
-                isDark ? 'text-white' : 'text-neutral-900'
-              }`}
-              title="Нажмите, чтобы переименовать тетрадь"
+              style={{
+                left: Math.max(16, Math.min(window.innerWidth - 300, pan.x + selectionBox.x * scale)),
+                top: Math.max(70, pan.y + selectionBox.y * scale - 48),
+              }}
             >
-              {notebook.title}
-            </button>
-          )}
-
-          {/* Save Button: Pure White in Light Theme */}
-          <button
-            onClick={handleManualSave}
-            className={`px-3 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-              saveSuccessFeedback
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : isDark
-                  ? 'bg-neutral-800 text-neutral-100 hover:bg-neutral-700 border border-neutral-700/60'
-                  : 'bg-white text-neutral-900 hover:bg-neutral-50 border border-neutral-300 shadow-xs'
-            }`}
-            title="Сохранить тетрадь"
-          >
-            {saveSuccessFeedback ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-white" />
-                <span>Сохранено ✓</span>
-              </>
-            ) : (
-              <span>Сохранить</span>
-            )}
-          </button>
-
-          <div className={`w-px h-4 mx-0.5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-          {/* Clear Canvas / Screen Button: Pure White in Light Theme */}
-          <button
-            onClick={handleClearCanvas}
-            className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-              isDark
-                ? 'text-red-400 bg-red-950/40 hover:bg-red-900/60 border border-red-900/60'
-                : 'text-red-600 bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 shadow-xs'
-            }`}
-            title="Очистить весь лист (можно отменить Ctrl+Z)"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Очистить лист</span>
-          </button>
-        </div>
-
-        {/* Center: Pages Navigator */}
-        <div className={`pointer-events-auto hidden md:flex items-center gap-1 backdrop-blur-xl px-3 py-1.5 rounded-2xl border shadow-md text-xs font-medium ${
-          isDark 
-            ? 'bg-[#12131A]/95 border-neutral-700/80 text-white' 
-            : 'bg-white/95 border-neutral-200 text-neutral-900'
-        }`}>
-          <button
-            onClick={handlePrevPage}
-            disabled={currentPageIndex <= 0}
-            className={`p-1 rounded-lg disabled:opacity-20 transition-all ${
-              isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200 shadow-2xs'
-            }`}
-            title="Предыдущая страница"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-
-          <span className={`font-mono text-xs font-bold px-2 ${
-            isDark ? 'text-white' : 'text-neutral-900'
-          }`}>
-            Стр. {currentPageIndex + 1} из {notebook.pages.length}
-          </span>
-
-          <button
-            onClick={handleNextPage}
-            disabled={currentPageIndex >= notebook.pages.length - 1}
-            className={`p-1 rounded-lg disabled:opacity-20 transition-all ${
-              isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200 shadow-2xs'
-            }`}
-            title="Следующая страница"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={handleAddPage}
-            className={`px-2 py-1 rounded-lg font-bold ml-1 transition-all flex items-center gap-1 ${
-              isDark
-                ? 'bg-blue-950/60 text-blue-400 hover:bg-blue-900/60'
-                : 'bg-white text-blue-600 border border-blue-200 hover:bg-blue-50 shadow-2xs'
-            }`}
-            title="Добавить страницу"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Стр.</span>
-          </button>
-
-          <button
-            onClick={() => setIsPagesDrawerOpen(!isPagesDrawerOpen)}
-            className={`p-1.5 rounded-lg transition-all ml-0.5 ${
-              isPagesDrawerOpen
-                ? 'bg-blue-600 text-white'
-                : isDark
-                  ? 'text-neutral-300 hover:bg-neutral-800'
-                  : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200 shadow-2xs'
-            }`}
-            title="Миниатюры страниц"
-          >
-            <Layers className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Right Section: Clean Separated Controls: [Разметка] [Цвет листа] [Обложка] [Тема] */}
-        <div className={`pointer-events-auto flex items-center gap-2 backdrop-blur-xl px-3 py-1.5 rounded-2xl border shadow-md text-xs ${
-          isDark 
-            ? 'bg-[#12131A]/95 border-neutral-700/80 text-white' 
-            : 'bg-white/95 border-neutral-200 text-neutral-900'
-        }`}>
-          
-          {/* 1. SEPARATED: RULING / GRID SELECTOR */}
-          <div className="relative">
-            <button
-              data-popover-trigger="true"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsRulingPopoverOpen(!isRulingPopoverOpen);
-                setIsPaperColorPopoverOpen(false);
-                setIsCoverPopoverOpen(false);
-              }}
-              className={`px-2.5 py-1 rounded-xl font-bold transition-all flex items-center gap-1.5 text-xs ${
-                isRulingPopoverOpen
-                  ? isDark
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-white text-blue-600 border-2 border-blue-600 shadow-xs'
-                  : isDark
-                    ? 'bg-neutral-800 text-white hover:bg-neutral-700 border border-neutral-700/60'
-                    : 'bg-white text-neutral-900 hover:bg-neutral-50 border border-neutral-300 shadow-xs'
-              }`}
-              title="Выбрать разлиновку (Клетка, Линейка, Точки, Чистый)"
-            >
-              <Grid className="w-3.5 h-3.5 text-blue-500" />
-              <span>Разметка: {currentRulingName}</span>
-            </button>
-
-            {isRulingPopoverOpen && (
-              <div 
-                data-popover="true"
-                onClick={(e) => e.stopPropagation()}
-                className={`absolute right-0 top-full mt-2.5 p-4 rounded-2xl shadow-2xl z-50 w-72 animate-in fade-in slide-in-from-top-2 duration-150 border ${
-                  isDark 
-                    ? 'bg-[#181922] border-neutral-700 text-white' 
-                    : 'bg-white border-neutral-200 text-neutral-900'
+              <span className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                {selectedIds.strokeIds.length + selectedIds.shapeIds.length + selectedIds.textIds.length} выбр.
+              </span>
+              <div className={`w-px h-3.5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDuplicateSelected();
+                }}
+                className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer ${
+                  isDark
+                    ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
+                    : 'bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-800 shadow-2xs'
                 }`}
+                title="Дублировать выделенные элементы"
               >
-                <span className={`text-xs font-bold block mb-2.5 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                  Разлиновка страницы:
-                </span>
+                <Copy className="w-3.5 h-3.5 text-[#6355C7]" />
+                <span>Копия</span>
+              </button>
+              
+              <div className="relative">
+                <button
+                  data-popover-trigger="true"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsSelectionColorPickerOpen(!isSelectionColorPickerOpen);
+                  }}
+                  className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${
+                    isSelectionColorPickerOpen
+                      ? 'bg-[#6355C7] text-white'
+                      : isDark
+                      ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
+                      : 'bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-800 shadow-2xs'
+                  }`}
+                  title="Выбрать цвет для выделения"
+                >
+                  <span
+                    className="w-3 h-3 rounded-full border border-black/20 inline-block shadow-2xs"
+                    style={{ backgroundColor: strokeColor }}
+                  />
+                  <span>Цвет</span>
+                </button>
 
-                <div className="grid grid-cols-2 gap-2 mb-3.5">
-                  {RULING_TYPES.map((r) => {
-                    const isSelected = currentPage.background.type === r.id;
-                    const IconComp = r.icon;
-                    return (
+                {isSelectionColorPickerOpen && (
+                  <div
+                    data-popover="true"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className={`absolute bottom-full left-0 mb-2 p-2 rounded-2xl border shadow-2xl flex items-center gap-1.5 z-50 animate-in fade-in zoom-in-95 duration-100 ${
+                      isDark ? 'bg-[#1C1D2C] border-neutral-700' : 'bg-white border-neutral-200 shadow-xl'
+                    }`}
+                  >
+                    {[
+                      '#0F172A',
+                      '#2563EB',
+                      '#7C3AED',
+                      '#DC2626',
+                      '#EA580C',
+                      '#059669',
+                      '#D97706',
+                      '#EC4899',
+                    ].map((c) => (
                       <button
-                        key={r.id}
-                        onClick={() => {
-                          updateCurrentPage((page) => ({
-                            ...page,
-                            background: {
-                              ...page.background,
-                              type: r.id,
-                            },
-                          }));
-                          setIsRulingPopoverOpen(false);
+                        key={c}
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRecolorSelected(c);
                         }}
-                        className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all ${
-                          isSelected
-                            ? isDark
-                              ? 'border-blue-600 bg-blue-950/60 ring-2 ring-blue-500 text-blue-300'
-                              : 'border-2 border-blue-600 bg-white ring-2 ring-blue-100 text-blue-600 font-bold shadow-xs'
-                            : isDark
-                              ? 'border-neutral-700 hover:bg-neutral-800 text-neutral-200'
-                              : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 text-neutral-800 bg-white shadow-2xs'
+                        style={{ backgroundColor: c }}
+                        className={`w-5 h-5 rounded-full border border-black/10 transition-transform hover:scale-115 cursor-pointer ${
+                          strokeColor === c ? 'ring-2 ring-[#6355C7] ring-offset-1' : ''
                         }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <IconComp className="w-4 h-4 text-blue-500" />
-                          {isSelected && <Check className="w-3.5 h-3.5 text-blue-600" />}
-                        </div>
-                        <div className="text-xs font-bold">{r.name}</div>
-                        <div className={`text-[10px] truncate ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>{r.desc}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Grid Size Slider */}
-                {currentPage.background.type !== 'blank' && (
-                  <div className={`pt-2.5 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-                    <div className="flex items-center justify-between text-xs font-bold mb-1.5">
-                      <span className={isDark ? 'text-neutral-200' : 'text-neutral-800'}>Шаг сетки:</span>
-                      <span className="font-mono text-blue-600 font-bold">
-                        {currentPage.background.gridSize}px
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 mb-2">
-                      {[18, 25, 34].map((sz) => (
-                        <button
-                          key={sz}
-                          onClick={() => {
-                            updateCurrentPage((page) => ({
-                              ...page,
-                              background: { ...page.background, gridSize: sz },
-                            }));
-                          }}
-                          className={`flex-1 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
-                            currentPage.background.gridSize === sz
-                              ? 'bg-blue-600 text-white border-blue-600'
-                              : isDark
-                                ? 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
-                                : 'bg-white text-neutral-800 border-neutral-200 hover:bg-neutral-50 shadow-2xs'
-                          }`}
-                        >
-                          {sz === 18 ? 'Мелкая' : sz === 25 ? 'Обычная' : 'Крупная'}
-                        </button>
-                      ))}
-                    </div>
-
-                    <input
-                      type="range"
-                      min="16"
-                      max="48"
-                      value={currentPage.background.gridSize}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value, 10);
-                        updateCurrentPage((page) => ({
-                          ...page,
-                          background: { ...page.background, gridSize: val },
-                        }));
-                      }}
-                      className="w-full accent-blue-600 cursor-pointer"
-                    />
+                      />
+                    ))}
+                    <label
+                      title="Свой цвет"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="w-5 h-5 rounded-full border border-dashed border-neutral-400 flex items-center justify-center cursor-pointer hover:border-[#6355C7]"
+                    >
+                      <input
+                        type="color"
+                        value={strokeColor}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          handleRecolorSelected(e.target.value);
+                        }}
+                        className="opacity-0 w-0 h-0"
+                      />
+                      <Palette className="w-3 h-3 text-neutral-500" />
+                    </label>
                   </div>
                 )}
               </div>
-            )}
-          </div>
 
-          {/* 2. SEPARATED: PAPER COLOR SELECTOR */}
-          <div className="relative">
-            <button
-              data-popover-trigger="true"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsPaperColorPopoverOpen(!isPaperColorPopoverOpen);
-                setIsRulingPopoverOpen(false);
-                setIsCoverPopoverOpen(false);
-              }}
-              className={`px-2.5 py-1 rounded-xl font-bold transition-all flex items-center gap-2 text-xs ${
-                isPaperColorPopoverOpen
-                  ? isDark
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-white text-blue-600 border-2 border-blue-600 shadow-xs'
-                  : isDark
-                    ? 'bg-neutral-800 text-white hover:bg-neutral-700 border border-neutral-700/60'
-                    : 'bg-white text-neutral-900 hover:bg-neutral-50 border border-neutral-300 shadow-xs'
-              }`}
-              title="Выбрать цвет фона бумаги (Белая, Крем, Midnight, Графит)"
-            >
-              <span>Цвет листа</span>
-              <span
-                className="w-4 h-4 rounded-full inline-block border-2 border-black/30 dark:border-white/50 shadow-xs shrink-0"
-                style={{ backgroundColor: currentPage.background.color }}
-              />
-            </button>
-
-            {isPaperColorPopoverOpen && (
-              <div 
-                data-popover="true"
-                onClick={(e) => e.stopPropagation()}
-                className={`absolute right-0 top-full mt-2.5 p-4 rounded-2xl shadow-2xl z-50 w-76 animate-in fade-in slide-in-from-top-2 duration-150 border ${
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteSelected();
+                }}
+                className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer ${
                   isDark
-                    ? 'bg-[#181922] border-neutral-700 text-white'
-                    : 'bg-white border-neutral-200 text-neutral-900'
+                    ? 'bg-red-950/60 text-red-400 hover:bg-red-900/60'
+                    : 'bg-white border border-red-200 hover:bg-red-50 text-red-600 shadow-2xs'
                 }`}
+                title="Удалить выделение"
               >
-                <span className={`text-xs font-bold block mb-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                  Светлая бумага:
-                </span>
-                <div className="grid grid-cols-3 gap-2 mb-3.5">
-                  {LIGHT_PAPERS.map((p) => {
-                    const isSelected = currentPage.background.color.toLowerCase() === p.color.toLowerCase();
-                    return (
-                      <button
-                        key={p.color}
-                        onClick={() => {
-                          updateCurrentPage((page) => ({
-                            ...page,
-                            background: { ...page.background, color: p.color },
-                          }));
-                          if (strokeColor === '#F1F5F9' || strokeColor === '#FFFFFF') {
-                            setStrokeColor('#0F172A');
-                          }
-                          setIsPaperColorPopoverOpen(false);
-                        }}
-                        className={`p-2 rounded-xl border text-center flex flex-col items-center gap-1.5 transition-all ${
-                          isSelected
-                            ? isDark
-                              ? 'border-blue-600 bg-blue-950/60 ring-2 ring-blue-500'
-                              : 'border-2 border-blue-600 bg-white ring-2 ring-blue-100 shadow-xs'
-                            : isDark
-                              ? 'border-neutral-700 hover:bg-neutral-800'
-                              : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 bg-white shadow-2xs'
-                        }`}
-                      >
-                        <span
-                          className="w-6 h-6 rounded-full border border-black/20 shadow-xs"
-                          style={{ backgroundColor: p.color }}
-                        />
-                        <span className={`text-[11px] font-bold truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                          {p.name}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Удалить</span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectionBox(null);
+                  setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+                  setIsSelectionColorPickerOpen(false);
+                }}
+                className={`p-1 rounded-lg cursor-pointer ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'}`}
+                title="Снять выделение"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
-                <span className={`text-xs font-bold block mb-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                  Тёмная бумага (комфортная для глаз):
-                </span>
-                <div className="grid grid-cols-3 gap-2 mb-3.5">
-                  {DARK_PAPERS.map((p) => {
-                    const isSelected = currentPage.background.color.toLowerCase() === p.color.toLowerCase();
-                    return (
-                      <button
-                        key={p.color}
-                        onClick={() => {
-                          updateCurrentPage((page) => ({
-                            ...page,
-                            background: { ...page.background, color: p.color },
-                          }));
-                          if (strokeColor === '#0F172A') {
-                            setStrokeColor('#F1F5F9');
-                          }
-                          setIsPaperColorPopoverOpen(false);
-                        }}
-                        className={`p-2 rounded-xl border text-center flex flex-col items-center gap-1.5 transition-all ${
-                          isSelected
-                            ? isDark
-                              ? 'border-blue-600 bg-blue-950/60 ring-2 ring-blue-500'
-                              : 'border-2 border-blue-600 bg-white ring-2 ring-blue-100 shadow-xs'
-                            : isDark
-                              ? 'border-neutral-700 hover:bg-neutral-800'
-                              : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 bg-white shadow-2xs'
-                        }`}
-                      >
-                        <span
-                          className="w-6 h-6 rounded-full border border-white/30 shadow-xs"
-                          style={{ backgroundColor: p.color }}
-                        />
-                        <span className={`text-[11px] font-bold truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                          {p.name}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Custom Color Input */}
-                <div className={`pt-2.5 border-t flex items-center justify-between ${
-                  isDark ? 'border-neutral-800' : 'border-neutral-200'
-                }`}>
-                  <span className={`text-xs font-semibold ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>Свой цвет листа:</span>
-                  <input
-                    type="color"
-                    value={currentPage.background.color}
-                    onChange={(e) => {
+          {/* Inline Text Editor */}
+          {editingText && (
+            <div
+              className={`absolute z-40 p-2.5 rounded-2xl shadow-2xl border-2 border-[#6355C7] ${
+                isDark ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-900'
+              }`}
+              style={{
+                left: pan.x + editingText.x * scale,
+                top: pan.y + editingText.y * scale,
+              }}
+            >
+              <textarea
+                autoFocus
+                rows={2}
+                placeholder="Введите текст..."
+                value={editingText.text}
+                onChange={(e) => setEditingText({ ...editingText, text: e.target.value })}
+                className={`w-60 p-2 text-sm bg-transparent border-none resize-none focus:outline-none ${
+                  isDark ? 'text-white' : 'text-neutral-900'
+                }`}
+              />
+              <div className="flex items-center justify-end gap-1.5 mt-1">
+                <button
+                  onClick={() => setEditingText(null)}
+                  className={`px-2.5 py-1 text-xs font-semibold ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-950'}`}
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={() => {
+                    if (editingText.text.trim()) {
+                      const newTextObj: TextObject = {
+                        id: `txt_${Date.now()}`,
+                        x: editingText.x,
+                        y: editingText.y,
+                        width: 250,
+                        height: 50,
+                        text: editingText.text,
+                        fontSize: editingText.fontSize,
+                        fontFamily: 'Inter, sans-serif',
+                        color: editingText.color,
+                        bold: editingText.bold,
+                        italic: editingText.italic,
+                        createdAt: Date.now(),
+                        updatedAt: Date.now(),
+                      };
                       updateCurrentPage((page) => ({
                         ...page,
-                        background: { ...page.background, color: e.target.value },
-                      }));
-                    }}
-                    className="w-8 h-8 rounded-lg cursor-pointer border border-neutral-300 p-0"
-                    title="Выбрать любой цвет"
-                  />
-                </div>
+                        texts: [...(page.texts || []), newTextObj],
+                      }), 'Add text');
+                    }
+                    setEditingText(null);
+                  }}
+                  className="px-3.5 py-1 text-xs font-bold rounded-lg shadow-xs bg-[#6355C7] text-white hover:bg-[#5244B4]"
+                >
+                  Вставить
+                </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          {/* 3. SEPARATED: COVER SELECTOR */}
-          <div className="relative">
-            <button
-              data-popover-trigger="true"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsCoverPopoverOpen(!isCoverPopoverOpen);
-                setIsRulingPopoverOpen(false);
-                setIsPaperColorPopoverOpen(false);
-              }}
-              className={`px-2.5 py-1 rounded-xl font-bold transition-all flex items-center gap-2 text-xs ${
-                isCoverPopoverOpen
-                  ? isDark
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-white text-blue-600 border-2 border-blue-600 shadow-xs'
-                  : isDark
-                    ? 'bg-neutral-800 text-white hover:bg-neutral-700 border border-neutral-700/60'
-                    : 'bg-white text-neutral-900 hover:bg-neutral-50 border border-neutral-300 shadow-xs'
-              }`}
-              title="Выбрать цвет обложки тетради"
-            >
-              <Bookmark className="w-3.5 h-3.5 text-blue-500" />
-              <span>Обложка</span>
-              <span
-                className="w-4 h-4 rounded-full inline-block border-2 border-white dark:border-neutral-900 shadow-sm shrink-0"
-                style={{ backgroundColor: notebook.coverColor }}
-              />
-            </button>
-
-            {isCoverPopoverOpen && (
-              <div 
+          {/* Bottom Floating Status Bar & Sheet Zoom Controls */}
+          <div className="absolute bottom-4 right-6 z-30 pointer-events-auto flex items-center gap-2">
+            {/* Zoom Presets Popover */}
+            {isZoomMenuOpen && (
+              <div
                 data-popover="true"
                 onClick={(e) => e.stopPropagation()}
-                className={`absolute right-0 top-full mt-2.5 p-4 rounded-2xl shadow-2xl z-50 w-80 animate-in fade-in slide-in-from-top-2 duration-150 border ${
+                className={`absolute bottom-full mb-2 right-0 w-52 p-1.5 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-150 z-50 text-xs font-semibold ${
                   isDark
-                    ? 'bg-[#181922] border-neutral-700 text-white'
-                    : 'bg-white border-neutral-200 text-neutral-900'
+                    ? 'bg-[#181928] border-neutral-700 text-neutral-200'
+                    : 'bg-white border-neutral-200 text-neutral-800 shadow-xl'
                 }`}
               >
-                <span className={`text-xs font-bold block mb-2.5 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                  Цвет обложки тетради:
-                </span>
-
-                <div className="grid grid-cols-2 gap-2 mb-3.5 max-h-64 overflow-y-auto pr-1">
-                  {COVER_PRESETS.map((c) => {
-                    const isSelected = notebook.coverColor.toLowerCase() === c.color.toLowerCase();
-                    return (
-                      <button
-                        key={c.color}
-                        onClick={() => {
-                          onUpdateNotebook({ ...notebook, coverColor: c.color });
-                          setIsCoverPopoverOpen(false);
-                        }}
-                        className={`p-2 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
-                          isSelected
-                            ? isDark
-                              ? 'border-blue-600 bg-blue-950/60 ring-2 ring-blue-500'
-                              : 'border-2 border-blue-600 bg-white ring-2 ring-blue-100 shadow-xs'
-                            : isDark
-                              ? 'border-neutral-700 hover:bg-neutral-800'
-                              : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 bg-white shadow-2xs'
-                        }`}
-                      >
-                        <span
-                          className="w-6 h-6 rounded-lg border-2 border-white/80 dark:border-neutral-700 shadow-sm shrink-0"
-                          style={{ backgroundColor: c.color }}
-                        />
-                        <span className={`text-[11px] font-bold truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                          {c.name}
-                        </span>
-                        {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 ml-auto shrink-0" />}
-                      </button>
-                    );
-                  })}
+                <div className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  Масштаб листа
                 </div>
-
-                <div className={`pt-2.5 border-t flex items-center justify-between ${
-                  isDark ? 'border-neutral-800' : 'border-neutral-200'
-                }`}>
-                  <span className={`text-xs font-semibold ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>Свой оттенок:</span>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={notebook.coverColor}
-                      onChange={(e) => onUpdateNotebook({ ...notebook, coverColor: e.target.value })}
-                      className="w-8 h-8 rounded-lg cursor-pointer border border-neutral-300 p-0"
-                      title="Выбрать любой цвет"
-                    />
-                    <span className={`font-mono text-xs font-bold ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>
-                      {notebook.coverColor.toUpperCase()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className={`w-px h-4 mx-0.5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-          {/* Theme Toggle Button: Pure White in Light Theme */}
-          <button
-            onClick={onToggleTheme}
-            className={`p-1.5 rounded-xl transition-all ${
-              isDark
-                ? 'border border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                : 'border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50 shadow-xs'
-            }`}
-            title={isDark ? 'Включить светлую тему' : 'Включить тёмную тему'}
-          >
-            {isDark ? (
-              <Sun className="w-4 h-4 text-amber-400" />
-            ) : (
-              <Moon className="w-4 h-4 text-blue-600" />
-            )}
-          </button>
-
-          {/* Undo / Redo */}
-          <button
-            onClick={handleUndo}
-            disabled={historyIndex <= 0}
-            className={`p-1.5 rounded-xl disabled:opacity-20 transition-all ${
-              isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200 shadow-2xs'
-            }`}
-            title="Отменить (Ctrl+Z)"
-          >
-            <Undo2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleRedo}
-            disabled={historyIndex >= history.length - 1}
-            className={`p-1.5 rounded-xl disabled:opacity-20 transition-all ${
-              isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200 shadow-2xs'
-            }`}
-            title="Повторить (Ctrl+Y)"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
-
-          {/* Export Button: Pure White with bold Blue accent in Light Theme */}
-          <button
-            onClick={() => setIsExportModalOpen(true)}
-            className={`px-3.5 py-1.5 rounded-xl font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 ${
-              isDark
-                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                : 'bg-white border-2 border-blue-600 hover:bg-blue-50 text-blue-600'
-            }`}
-          >
-            <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Экспорт</span>
-          </button>
-        </div>
-      </header>
-
-      {/* 2. Expansive Interactive Canvas on Desk */}
-      <canvas
-        ref={canvasRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onWheel={handleWheel}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        className={`w-full h-full touch-none block absolute inset-0 ${
-          isSpacePressed || activeTool === 'pan'
-            ? 'cursor-grab active:cursor-grabbing'
-            : activeTool === 'eraser'
-            ? 'cursor-crosshair'
-            : 'cursor-crosshair'
-        }`}
-      />
-
-      {/* 3. Floating Selection Toolbar (when elements are selected) */}
-      {selectionBox && hasSelectedItems && (
-        <div
-          className={`absolute z-40 border rounded-2xl shadow-2xl px-3 py-1.5 flex items-center gap-2 text-xs font-bold animate-in fade-in zoom-in-95 duration-100 ${
-            isDark
-              ? 'bg-[#181922] border-neutral-700 text-white'
-              : 'bg-white border-neutral-200 text-neutral-900'
-          }`}
-          style={{
-            left: Math.max(16, Math.min(window.innerWidth - 300, pan.x + selectionBox.x * scale)),
-            top: Math.max(70, pan.y + selectionBox.y * scale - 48),
-          }}
-        >
-          <span className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-            {selectedIds.strokeIds.length + selectedIds.shapeIds.length + selectedIds.textIds.length} выбр.
-          </span>
-          <div className={`w-px h-3.5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-          <button
-            onClick={handleDuplicateSelected}
-            className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${
-              isDark
-                ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                : 'bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-800 shadow-2xs'
-            }`}
-            title="Дублировать выделенные элементы"
-          >
-            <Copy className="w-3.5 h-3.5 text-blue-500" />
-            <span>Копия</span>
-          </button>
-          <button
-            onClick={handleRecolorSelected}
-            className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${
-              isDark
-                ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                : 'bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-800 shadow-2xs'
-            }`}
-            title="Применить текущий цвет к выделению"
-          >
-            <Palette className="w-3.5 h-3.5 text-purple-500" />
-            <span>Цвет</span>
-          </button>
-          <button
-            onClick={handleDeleteSelected}
-            className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${
-              isDark
-                ? 'bg-red-950/60 text-red-400 hover:bg-red-900/60'
-                : 'bg-white border border-red-200 hover:bg-red-50 text-red-600 shadow-2xs'
-            }`}
-            title="Удалить выделение"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Удалить</span>
-          </button>
-          <button
-            onClick={() => {
-              setSelectionBox(null);
-              setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
-            }}
-            className={`p-1 rounded-lg ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'}`}
-            title="Снять выделение"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* 4. Floating Zoom Controller */}
-      <div className="absolute bottom-6 right-6 z-30 pointer-events-auto flex flex-col items-end">
-        {/* Zoom Presets Popover */}
-        {isZoomMenuOpen && (
-          <div
-            data-popover="true"
-            onClick={(e) => e.stopPropagation()}
-            className={`mb-2 w-52 p-1.5 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-150 z-50 text-xs font-semibold ${
-              isDark
-                ? 'bg-[#181922] border-neutral-700 text-neutral-200'
-                : 'bg-white border-neutral-200 text-neutral-800 shadow-xl'
-            }`}
-          >
-            <div className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-              Масштаб листа
-            </div>
-            {[
-              { label: '50%', value: 0.50 },
-              { label: '70% (По умолчанию)', value: 0.70 },
-              { label: '100% (1:1 Реальный)', value: 1.00 },
-              { label: '125%', value: 1.25 },
-              { label: '150%', value: 1.50 },
-              { label: '200%', value: 2.00 },
-            ].map((item) => {
-              const isSelected = Math.abs(scale - item.value) < 0.03;
-              return (
-                <button
-                  key={item.label}
-                  onClick={() => handleSetPresetZoom(item.value)}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
-                    isSelected
-                      ? isDark ? 'bg-blue-600/30 text-blue-400 font-bold' : 'bg-blue-50 text-blue-600 font-bold'
-                      : isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
-                  }`}
-                >
-                  <span>{item.label}</span>
-                  {isSelected && <Check className="w-3.5 h-3.5 text-blue-500" />}
-                </button>
-              );
-            })}
-            <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-100'}`} />
-            <button
-              onClick={handleToggleFitToWidth}
-              className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
-                isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
-              }`}
-            >
-              <span className="flex items-center gap-2">
-                <Maximize2 className="w-3.5 h-3.5 text-blue-500" />
-                Вписать во весь экран
-              </span>
-            </button>
-          </div>
-        )}
-
-        <div className={`flex items-center gap-1 backdrop-blur-xl px-2.5 py-1.5 rounded-2xl border shadow-2xl text-xs font-bold ${
-          isDark
-            ? 'bg-[#12131A]/95 border-neutral-700/80 text-white'
-            : 'bg-white/95 border-neutral-200 text-neutral-900'
-        }`}>
-          {/* Zoom Out Button */}
-          <button
-            onClick={() => handleZoomDelta(0.85)}
-            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${
-              isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Уменьшить масштаб (Ctrl -)"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-
-          {/* Current Zoom Percentage & Preset Selector */}
-          <button
-            data-popover-trigger="true"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsZoomMenuOpen(!isZoomMenuOpen);
-            }}
-            className={`px-2.5 py-1 rounded-lg font-mono text-xs font-bold transition-colors flex items-center gap-1 ${
-              isDark
-                ? 'text-white hover:text-blue-400 hover:bg-neutral-800/60'
-                : 'text-neutral-900 hover:text-blue-600 hover:bg-neutral-100'
-            }`}
-            title="Выбрать масштаб листа (кликните для списка)"
-          >
-            <span>{Math.round(scale * 100)}%</span>
-          </button>
-
-          {/* Zoom In Button */}
-          <button
-            onClick={() => handleZoomDelta(1.15)}
-            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${
-              isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Увеличить масштаб (Ctrl +)"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-
-          <div className={`w-px h-4 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-          {/* Two Opposing Arrows (Maximize2): Fit to width / Full Page View Toggle */}
-          {(() => {
-            const fitScale = Math.max(0.3, Math.min(2.5, (window.innerWidth - 48) / currentPage.width));
-            const isFitWidth = Math.abs(scale - fitScale) < 0.05;
-            return (
-              <button
-                onClick={handleToggleFitToWidth}
-                className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${
-                  isFitWidth
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : isDark
-                      ? 'text-neutral-200 hover:bg-neutral-800'
-                      : 'text-neutral-700 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-                }`}
-                title={
-                  isFitWidth
-                    ? 'Вернуть масштаб 70%'
-                    : 'Вписать лист во весь экран по ширине'
-                }
-              >
-                <Maximize2 className="w-4 h-4" />
-              </button>
-            );
-          })()}
-        </div>
-      </div>
-
-      {/* 5. High-Contrast Bottom Tool Dock */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-auto">
-        {/* Tool Options Popover */}
-        {showToolOptions && (
-          <div 
-            data-popover="true"
-            onClick={(e) => e.stopPropagation()}
-            className={`mb-3 p-3.5 rounded-2xl shadow-2xl flex items-center gap-3.5 text-xs animate-in fade-in slide-in-from-bottom-2 duration-150 border ${
-              isDark
-                ? 'bg-[#181922] border-neutral-700 text-white'
-                : 'bg-white border-neutral-200 text-neutral-900'
-            }`}
-          >
-            {['pen', 'pencil', 'marker'].includes(activeTool) && (
-              <>
-                <div className="flex items-center gap-1.5">
-                  {PRESET_STROKE_SIZES.map((size) => (
-                    <button
-                      key={size}
-                      onClick={() => setStrokeWidth(size)}
-                      className={`w-7 h-7 rounded-xl flex items-center justify-center font-mono text-xs font-bold transition-all ${
-                        strokeWidth === size
-                          ? 'bg-blue-600 text-white shadow-md scale-105'
-                          : isDark
-                            ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                            : 'bg-white text-neutral-800 hover:bg-neutral-50 border border-neutral-200 shadow-2xs'
-                      }`}
-                    >
-                      {size}
-                    </button>
-                  ))}
-                </div>
-
-                <div className={`w-px h-5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-                <div className="flex items-center gap-2">
-                  {PREMIUM_INKS.map((c) => (
-                    <button
-                      key={c.color}
-                      onClick={() => setStrokeColor(c.color)}
-                      style={{ backgroundColor: c.color }}
-                      className={`w-6 h-6 rounded-full shadow-xs transition-transform ${
-                        c.border ? 'border-2 border-neutral-400' : 'border border-black/20'
-                      } ${strokeColor === c.color ? 'scale-125 ring-2 ring-blue-500 ring-offset-2' : 'hover:scale-110'}`}
-                      title={c.name}
-                    />
-                  ))}
-                  <input
-                    type="color"
-                    value={strokeColor}
-                    onChange={(e) => setStrokeColor(e.target.value)}
-                    className="w-6 h-6 rounded-full cursor-pointer border border-neutral-400 p-0"
-                    title="Свой оттенок чернил"
-                  />
-                </div>
-
-                <div className={`w-px h-5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-                <div className={`flex items-center gap-2 text-xs font-bold ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                  <span>Непрозрачность:</span>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1"
-                    step="0.05"
-                    value={strokeOpacity}
-                    onChange={(e) => setStrokeOpacity(parseFloat(e.target.value))}
-                    className="w-20 accent-blue-600 cursor-pointer"
-                  />
-                  <span className={`font-mono w-7 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                    {Math.round(strokeOpacity * 100)}%
-                  </span>
-                </div>
-              </>
-            )}
-
-            {activeTool === 'eraser' && (
-              <>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setEraserMode('partial')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                      eraserMode === 'partial'
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : isDark
-                          ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                          : 'bg-white text-neutral-800 hover:bg-neutral-50 border border-neutral-200 shadow-2xs'
-                    }`}
-                  >
-                    Стирать часть штриха
-                  </button>
-                  <button
-                    onClick={() => setEraserMode('object')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                      eraserMode === 'object'
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : isDark
-                          ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                          : 'bg-white text-neutral-800 hover:bg-neutral-50 border border-neutral-200 shadow-2xs'
-                    }`}
-                  >
-                    Удалять объект целиком
-                  </button>
-                </div>
-
-                <div className={`w-px h-5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-                <div className={`flex items-center gap-2 text-xs font-bold ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                  <span>Размер ластика:</span>
-                  <input
-                    type="range"
-                    min="6"
-                    max="50"
-                    value={eraserRadius}
-                    onChange={(e) => setEraserRadius(parseInt(e.target.value, 10))}
-                    className="w-28 accent-blue-600 cursor-pointer"
-                  />
-                  <span className={`font-mono ${isDark ? 'text-white' : 'text-neutral-900'}`}>{eraserRadius}px</span>
-                </div>
-              </>
-            )}
-
-            {['rect', 'circle', 'triangle', 'line', 'dashed-line', 'arrow', 'dashed-arrow', 'star'].includes(activeTool) && (
-              <div className="flex items-center gap-1.5 flex-wrap max-w-sm">
                 {[
-                  { id: 'line', icon: Minus, label: 'Линия' },
-                  { id: 'dashed-line', icon: Minus, label: 'Пунктирная линия', isDashed: true },
-                  { id: 'arrow', icon: ArrowRight, label: 'Стрелка' },
-                  { id: 'dashed-arrow', icon: ArrowRight, label: 'Пунктирная стрелка', isDashed: true },
-                  { id: 'rect', icon: Square, label: 'Прямоугольник' },
-                  { id: 'circle', icon: Circle, label: 'Круг' },
-                  { id: 'triangle', icon: Triangle, label: 'Треугольник' },
-                  { id: 'star', icon: Star, label: 'Звезда' },
-                ].map((s) => {
-                  const Icon = s.icon;
+                  { label: '50%', value: 0.50 },
+                  { label: '70% (По умолчанию)', value: 0.70 },
+                  { label: '100% (1:1 Реальный)', value: 1.00 },
+                  { label: '125%', value: 1.25 },
+                  { label: '150%', value: 1.50 },
+                  { label: '200%', value: 2.00 },
+                  { label: '300%', value: 3.00 },
+                ].map((item) => {
+                  const isSelected = Math.abs(scale - item.value) < 0.03;
                   return (
                     <button
-                      key={s.id}
-                      onClick={() => setActiveTool(s.id as ToolType)}
-                      className={`p-2.5 rounded-xl transition-all relative flex items-center justify-center ${
-                        activeTool === s.id
-                          ? 'bg-blue-600 text-white shadow-md'
-                          : isDark
-                            ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                            : 'bg-white text-neutral-800 hover:bg-neutral-50 border border-neutral-200 shadow-2xs'
+                      key={item.label}
+                      onClick={() => handleSetPresetZoom(item.value)}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
+                        isSelected
+                          ? isDark ? 'bg-[#252238] text-[#A79AF3] font-bold' : 'bg-[#EFEAFD] text-[#6355C7] font-bold'
+                          : isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
                       }`}
-                      title={s.label}
                     >
-                      <Icon className={`w-4 h-4 ${s.isDashed ? 'stroke-dasharray-2' : ''}`} />
-                      {s.isDashed && (
-                        <span className="absolute bottom-0.5 text-[8px] font-mono font-bold leading-none">--</span>
-                      )}
+                      <span>{item.label}</span>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-[#6355C7]" />}
                     </button>
                   );
                 })}
+                <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-100'}`} />
+                <button
+                  onClick={handleToggleFitToWidth}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
+                    isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Maximize2 className="w-3.5 h-3.5 text-[#6355C7]" />
+                    Вписать по ширине
+                  </span>
+                </button>
               </div>
             )}
-          </div>
-        )}
 
-        {/* High-Contrast Tool Dock: Pure White in Light Theme */}
-        <div 
-          data-popover-trigger="true"
-          onClick={(e) => e.stopPropagation()}
-          className={`backdrop-blur-xl px-3 py-2 rounded-2xl border shadow-2xl flex items-center gap-1.5 ${
-            isDark
-              ? 'bg-[#12131A]/95 border-neutral-700/80'
-              : 'bg-white/95 border-neutral-200'
-          }`}
-        >
-          {/* Pen */}
-          <button
-            onClick={() => {
-              setActiveTool('pen');
-              setShowToolOptions(activeTool === 'pen' ? !showToolOptions : true);
-            }}
-            className={`p-2.5 rounded-xl transition-all relative ${
-              activeTool === 'pen'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Ручка (1)"
-          >
-            <PenTool className="w-5 h-5" />
-            <span
-              className="w-2.5 h-2.5 rounded-full absolute bottom-1 right-1 border border-white shadow-xs"
-              style={{ backgroundColor: strokeColor }}
-            />
-          </button>
-
-          {/* Pencil */}
-          <button
-            onClick={() => {
-              setActiveTool('pencil');
-              setShowToolOptions(activeTool === 'pencil' ? !showToolOptions : true);
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              activeTool === 'pencil'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Карандаш (2)"
-          >
-            <div className="w-5 h-5 flex items-center justify-center font-serif font-bold text-sm">✎</div>
-          </button>
-
-          {/* Highlighter */}
-          <button
-            onClick={() => {
-              setActiveTool('marker');
-              setShowToolOptions(activeTool === 'marker' ? !showToolOptions : true);
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              activeTool === 'marker'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Маркер (3)"
-          >
-            <Highlighter className="w-5 h-5" />
-          </button>
-
-          {/* Eraser */}
-          <button
-            onClick={() => {
-              setActiveTool('eraser');
-              setShowToolOptions(activeTool === 'eraser' ? !showToolOptions : true);
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              activeTool === 'eraser'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Ластик (4)"
-          >
-            <Eraser className="w-5 h-5" />
-          </button>
-
-          <div className={`w-px h-6 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-          {/* Shapes */}
-          <button
-            onClick={() => {
-              if (['line', 'dashed-line', 'arrow', 'dashed-arrow', 'rect', 'circle', 'triangle', 'star'].includes(activeTool)) {
-                setShowToolOptions(!showToolOptions);
-              } else {
-                setActiveTool('rect');
-                setShowToolOptions(true);
-              }
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              ['line', 'dashed-line', 'arrow', 'dashed-arrow', 'rect', 'circle', 'triangle', 'star'].includes(activeTool)
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Фигуры и линии (5)"
-          >
-            <Square className="w-5 h-5" />
-          </button>
-
-          {/* Text */}
-          <button
-            onClick={() => {
-              setActiveTool('text');
-              setShowToolOptions(false);
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              activeTool === 'text'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Текст (T)"
-          >
-            <Type className="w-5 h-5" />
-          </button>
-
-          {/* Image */}
-          <label
-            className={`p-2.5 rounded-xl transition-all cursor-pointer ${
+            {/* Bottom Dock Container */}
+            <div className={`flex items-center gap-1.5 backdrop-blur-xl px-3 py-1.5 rounded-2xl border shadow-xl text-xs font-semibold ${
               isDark
-                ? 'text-neutral-200 hover:bg-neutral-800'
-                : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Вставить картинку"
-          >
-            <ImageIcon className="w-5 h-5" />
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) insertImageFile(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
+                ? 'bg-[#12131F]/95 border-neutral-700/80 text-white'
+                : 'bg-white/95 border-[#E2E4EC] text-neutral-800'
+            }`}>
+              {/* Page Navigator */}
+              <button
+                onClick={handlePrevPage}
+                disabled={currentPageIndex <= 0}
+                className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                title="Предыдущая страница"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="font-mono text-xs px-1 text-neutral-500 dark:text-neutral-400">
+                {currentPageIndex + 1} / {notebook.pages.length}
+              </span>
+              <button
+                onClick={handleNextPage}
+                disabled={currentPageIndex >= notebook.pages.length - 1}
+                className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                title="Следующая страница"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
 
-          {/* Select */}
-          <button
-            onClick={() => {
-              setActiveTool('select');
-              setShowToolOptions(false);
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              activeTool === 'select'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Выделение и перемещение (V)"
-          >
-            <MousePointer className="w-5 h-5" />
-          </button>
+              <div className={`w-px h-3.5 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
 
-          {/* Pan */}
-          <button
-            onClick={() => {
-              setActiveTool('pan');
-              setShowToolOptions(false);
-            }}
-            className={`p-2.5 rounded-xl transition-all ${
-              activeTool === 'pan'
-                ? 'bg-blue-600 text-white shadow-md scale-105'
-                : isDark
-                  ? 'text-neutral-200 hover:bg-neutral-800'
-                  : 'text-neutral-800 hover:bg-neutral-100 bg-white border border-neutral-200/80 shadow-2xs'
-            }`}
-            title="Перемещение (H / Пробел)"
-          >
-            <Hand className="w-5 h-5" />
-          </button>
-        </div>
+              {/* Zoom Out Button */}
+              <button
+                onClick={() => handleZoomDelta(0.85)}
+                className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                title="Уменьшить масштаб (Ctrl -)"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Zoom Percentage */}
+              <button
+                data-popover-trigger="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsZoomMenuOpen(!isZoomMenuOpen);
+                }}
+                className="px-2 py-0.5 rounded-lg font-mono text-xs font-bold hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                title="Масштаб листа (клик для выбора)"
+              >
+                {Math.round(scale * 100)}%
+              </button>
+
+              {/* Zoom In Button */}
+              <button
+                onClick={() => handleZoomDelta(1.15)}
+                className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                title="Увеличить масштаб (Ctrl +)"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+
+              <div className={`w-px h-3.5 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
+
+              {/* Fit / Fullscreen Sheet Toggle ("так же лист на весь экран при желании может увеличиваться") */}
+              <button
+                onClick={toggleSheetFullscreen}
+                className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                  isSheetFullscreen
+                    ? 'bg-[#6355C7] text-white shadow-xs font-semibold'
+                    : 'hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                }`}
+                title="Развернуть лист во весь экран (скрыть панели и увеличить обзор)"
+              >
+                <Maximize2 className="w-3.5 h-3.5 text-[#6355C7]" />
+                <span>{isSheetFullscreen ? 'Обычный вид' : 'Полноэкранный лист'}</span>
+              </button>
+            </div>
+          </div>
+        </main>
+
+        {/* Right: Tool Sidebar */}
+        <ToolSidebar
+          activeTool={activeTool}
+          strokeColor={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeOpacity={strokeOpacity}
+          eraserMode={eraserMode}
+          eraserRadius={eraserRadius}
+          currentRulingType={currentPage.background.type}
+          currentRulingName={currentRulingName}
+          currentPaperColor={currentPage.background.color}
+          currentGridSize={currentPage.background.gridSize || (currentPage.background.type === 'ruled' ? 32 : 24)}
+          isLandscape={currentPage.width > currentPage.height}
+          isOpen={isToolSidebarOpen && !isSheetFullscreen}
+          theme={theme}
+          onToggleOpen={() => setIsToolSidebarOpen(!isToolSidebarOpen)}
+          onSetStrokeColor={setStrokeColor}
+          onSetStrokeWidth={setStrokeWidth}
+          onSetStrokeOpacity={setStrokeOpacity}
+          onSetEraserMode={setEraserMode}
+          onSetEraserRadius={setEraserRadius}
+          onSetRulingType={(t) => {
+            updateCurrentPage((page) => {
+              const isLand = page.width > page.height;
+              const dim = getStandardPageDimensions(t, isLand);
+              return {
+                ...page,
+                width: dim.width,
+                height: dim.height,
+                background: { ...page.background, type: t },
+              };
+            }, 'Смена разлиновки листа');
+          }}
+          onSetGridSize={(size) => {
+            updateCurrentPage((page) => ({
+              ...page,
+              background: { ...page.background, gridSize: size },
+            }));
+          }}
+          onSetPaperColor={(c) => {
+            updateCurrentPage((page) => ({
+              ...page,
+              background: { ...page.background, color: c },
+            }));
+
+            // Automatically switch pen color:
+            // Dark paper (Midnight, Графит) -> White (#FFFFFF)
+            // Light paper (Белая, Крем) -> Black (#0F172A)
+            if (isColorDark(c)) {
+              setStrokeColor('#FFFFFF');
+            } else {
+              setStrokeColor('#0F172A');
+            }
+          }}
+          onToggleOrientation={togglePageOrientation}
+        />
       </div>
 
-      {/* Inline Text Editor */}
-      {editingText && (
-        <div
-          className={`absolute z-40 p-2.5 rounded-2xl shadow-2xl border-2 border-blue-500 ${
-            isDark ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-900'
-          }`}
-          style={{
-            left: pan.x + editingText.x * scale,
-            top: pan.y + editingText.y * scale,
-          }}
-        >
-          <textarea
-            autoFocus
-            rows={2}
-            placeholder="Введите текст..."
-            value={editingText.text}
-            onChange={(e) => setEditingText({ ...editingText, text: e.target.value })}
-            className={`w-60 p-2 text-sm bg-transparent border-none resize-none focus:outline-none ${
-              isDark ? 'text-white' : 'text-neutral-900'
-            }`}
-          />
-          <div className="flex items-center justify-end gap-1.5 mt-1">
-            <button
-              onClick={() => setEditingText(null)}
-              className={`px-2.5 py-1 text-xs font-semibold ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-950'}`}
-            >
-              Отмена
-            </button>
-            <button
-              onClick={() => {
-                if (editingText.text.trim()) {
-                  const newTextObj: TextObject = {
-                    id: `txt_${Date.now()}`,
-                    x: editingText.x,
-                    y: editingText.y,
-                    width: 250,
-                    height: 50,
-                    text: editingText.text,
-                    fontSize: editingText.fontSize,
-                    fontFamily: 'Inter, sans-serif',
-                    color: editingText.color,
-                    bold: editingText.bold,
-                    italic: editingText.italic,
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                  };
-                  updateCurrentPage((page) => ({
-                    ...page,
-                    texts: [...(page.texts || []), newTextObj],
-                  }), 'Add text');
-                }
-                setEditingText(null);
-              }}
-              className={`px-3.5 py-1 text-xs font-bold rounded-lg shadow-xs transition-all ${
-                isDark ? 'bg-blue-600 text-white' : 'bg-white border border-neutral-300 text-neutral-900 hover:bg-neutral-50'
-              }`}
-            >
-              Вставить
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Pages Side Drawer */}
-      {isPagesDrawerOpen && (
-        <aside 
+      {/* Popover: Ruling Selector */}
+      {isRulingPopoverOpen && (
+        <div 
           data-popover="true"
           onClick={(e) => e.stopPropagation()}
-          className={`absolute right-0 top-0 bottom-0 w-64 border-l z-40 p-4 flex flex-col shadow-2xl animate-in slide-in-from-right duration-150 ${
+          className={`absolute right-8 top-24 p-4 rounded-2xl shadow-2xl z-50 w-72 animate-in fade-in slide-in-from-top-2 duration-150 border ${
             isDark 
               ? 'bg-[#181922] border-neutral-700 text-white' 
               : 'bg-white border-neutral-200 text-neutral-900'
           }`}
         >
-          <div className={`flex items-center justify-between pb-3 border-b mb-3 ${isDark ? 'border-neutral-700' : 'border-neutral-200'}`}>
-            <span className={`font-bold text-xs ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-              Страницы ({notebook.pages.length})
-            </span>
-            <button
-              onClick={handleAddPage}
-              className={`p-1 rounded-xl transition-all ${
-                isDark 
-                  ? 'hover:bg-neutral-800 text-neutral-200' 
-                  : 'hover:bg-neutral-100 text-neutral-800 bg-white border border-neutral-200 shadow-2xs'
-              }`}
-              title="Новая страница"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
+          <span className={`text-xs font-bold block mb-2.5 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+            Разлиновка страницы:
+          </span>
 
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-            {notebook.pages.map((p, idx) => {
-              const isCurrent = p.id === currentPage.id;
+          <div className="grid grid-cols-2 gap-2 mb-3.5">
+            {RULING_TYPES.map((r) => {
+              const isSelected = currentPage.background.type === r.id;
+              const IconComp = r.icon;
               return (
-                <div
-                  key={p.id}
-                  onClick={() => onUpdateNotebook({ ...notebook, currentPageId: p.id })}
-                  className={`group rounded-xl p-2.5 border transition-all cursor-pointer ${
-                    isCurrent
-                      ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/60 ring-2 ring-blue-500'
+                <button
+                  key={r.id}
+                  onClick={() => {
+                    updateCurrentPage((page) => ({
+                      ...page,
+                      background: {
+                        ...page.background,
+                        type: r.id,
+                      },
+                    }));
+                    setIsRulingPopoverOpen(false);
+                  }}
+                  className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                    isSelected
+                      ? isDark
+                        ? 'border-[#6355C7] bg-[#252238] ring-2 ring-[#6355C7] text-[#A79AF3]'
+                        : 'border-2 border-[#6355C7] bg-[#F7F6FC] ring-2 ring-[#EFEAFD] text-[#6355C7] font-bold shadow-xs'
                       : isDark
-                        ? 'border-neutral-700 hover:border-neutral-500 bg-[#12131A]'
-                        : 'border-neutral-200 hover:border-neutral-300 bg-white shadow-2xs'
+                        ? 'border-neutral-700 hover:bg-neutral-800 text-neutral-200'
+                        : 'border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 text-neutral-800 bg-white shadow-2xs'
                   }`}
                 >
-                  <div
-                    className="h-24 rounded-lg border border-neutral-200 dark:border-neutral-700 mb-2 flex items-center justify-center relative overflow-hidden shadow-xs"
-                    style={{ backgroundColor: p.background.color }}
-                  >
-                    <span className="text-[10px] font-mono font-bold text-neutral-400">Стр. #{idx + 1}</span>
+                  <div className="flex items-center justify-between">
+                    <IconComp className="w-4 h-4 text-[#6355C7]" />
+                    {isSelected && <Check className="w-3.5 h-3.5 text-[#6355C7]" />}
                   </div>
-                  <div className={`flex items-center justify-between text-xs font-semibold ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>
-                    <span className="truncate">{p.title || `Стр. ${idx + 1}`}</span>
-                    {notebook.pages.length > 1 && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const remaining = notebook.pages.filter((pg) => pg.id !== p.id);
-                          onUpdateNotebook({
-                            ...notebook,
-                            pages: remaining,
-                            currentPageId: remaining[0].id,
-                          });
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:text-red-700"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
+                  <div className="text-xs font-bold">{r.name}</div>
+                  <div className={`text-[10px] truncate ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>{r.desc}</div>
+                </button>
               );
             })}
           </div>
-        </aside>
+
+          {/* Grid Size Slider */}
+          {currentPage.background.type !== 'blank' && (
+            <div className={`pt-2.5 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
+              <div className="flex items-center justify-between text-xs font-bold mb-1.5">
+                <span className={isDark ? 'text-neutral-200' : 'text-neutral-800'}>Шаг сетки:</span>
+                <span className="font-mono text-[#6355C7] font-bold">
+                  {currentPage.background.gridSize}px
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 mb-2">
+                {[18, 25, 34].map((sz) => (
+                  <button
+                    key={sz}
+                    onClick={() => {
+                      updateCurrentPage((page) => ({
+                        ...page,
+                        background: { ...page.background, gridSize: sz },
+                      }));
+                    }}
+                    className={`flex-1 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                      currentPage.background.gridSize === sz
+                        ? 'bg-[#6355C7] text-white border-[#6355C7]'
+                        : isDark
+                          ? 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                          : 'bg-white text-neutral-800 border-neutral-200 hover:bg-neutral-50 shadow-2xs'
+                    }`}
+                  >
+                    {sz === 18 ? 'Мелкая' : sz === 25 ? 'Обычная' : 'Крупная'}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                type="range"
+                min="16"
+                max="48"
+                value={currentPage.background.gridSize}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  updateCurrentPage((page) => ({
+                    ...page,
+                    background: { ...page.background, gridSize: val },
+                  }));
+                }}
+                className="w-full accent-[#6355C7] cursor-pointer"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Popover: Paper Color Selector */}
+      {isPaperColorPopoverOpen && (
+        <div 
+          data-popover="true"
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute right-8 top-24 p-4 rounded-2xl shadow-2xl z-50 w-76 animate-in fade-in slide-in-from-top-2 duration-150 border ${
+            isDark
+              ? 'bg-[#181922] border-neutral-700 text-white'
+              : 'bg-white border-neutral-200 text-neutral-900'
+          }`}
+        >
+          <span className={`text-xs font-bold block mb-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+            Светлая бумага:
+          </span>
+          <div className="grid grid-cols-3 gap-2 mb-3.5">
+            {LIGHT_PAPERS.map((p) => {
+              const isSelected = currentPage.background.color.toLowerCase() === p.color.toLowerCase();
+              return (
+                <button
+                  key={p.color}
+                  onClick={() => {
+                    updateCurrentPage((page) => ({
+                      ...page,
+                      background: { ...page.background, color: p.color },
+                    }));
+                    if (strokeColor === '#F1F5F9' || strokeColor === '#FFFFFF') {
+                      setStrokeColor('#0F172A');
+                    }
+                    setIsPaperColorPopoverOpen(false);
+                  }}
+                  className={`p-2 rounded-xl border text-center flex flex-col items-center gap-1.5 transition-all ${
+                    isSelected
+                      ? isDark
+                        ? 'border-[#6355C7] bg-[#252238] ring-2 ring-[#6355C7]'
+                        : 'border-2 border-[#6355C7] bg-white ring-2 ring-[#EFEAFD] shadow-xs'
+                      : isDark
+                        ? 'border-neutral-700 hover:bg-neutral-800'
+                        : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 bg-white shadow-2xs'
+                  }`}
+                >
+                  <span
+                    className="w-6 h-6 rounded-full border border-black/20 shadow-xs"
+                    style={{ backgroundColor: p.color }}
+                  />
+                  <span className={`text-[11px] font-bold truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+                    {p.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <span className={`text-xs font-bold block mb-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+            Тёмная бумага:
+          </span>
+          <div className="grid grid-cols-3 gap-2 mb-3.5">
+            {DARK_PAPERS.map((p) => {
+              const isSelected = currentPage.background.color.toLowerCase() === p.color.toLowerCase();
+              return (
+                <button
+                  key={p.color}
+                  onClick={() => {
+                    updateCurrentPage((page) => ({
+                      ...page,
+                      background: { ...page.background, color: p.color },
+                    }));
+                    if (strokeColor === '#0F172A') {
+                      setStrokeColor('#F1F5F9');
+                    }
+                    setIsPaperColorPopoverOpen(false);
+                  }}
+                  className={`p-2 rounded-xl border text-center flex flex-col items-center gap-1.5 transition-all ${
+                    isSelected
+                      ? isDark
+                        ? 'border-[#6355C7] bg-[#252238] ring-2 ring-[#6355C7]'
+                        : 'border-2 border-[#6355C7] bg-white ring-2 ring-[#EFEAFD] shadow-xs'
+                      : isDark
+                        ? 'border-neutral-700 hover:bg-neutral-800'
+                        : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 bg-white shadow-2xs'
+                  }`}
+                >
+                  <span
+                    className="w-6 h-6 rounded-full border border-white/30 shadow-xs"
+                    style={{ backgroundColor: p.color }}
+                  />
+                  <span className={`text-[11px] font-bold truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+                    {p.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Custom Color Input */}
+          <div className={`pt-2.5 border-t flex items-center justify-between ${
+            isDark ? 'border-neutral-800' : 'border-neutral-200'
+          }`}>
+            <span className={`text-xs font-semibold ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>Свой цвет листа:</span>
+            <input
+              type="color"
+              value={currentPage.background.color}
+              onChange={(e) => {
+                const newColor = e.target.value;
+                updateCurrentPage((page) => ({
+                  ...page,
+                  background: { ...page.background, color: newColor },
+                }));
+                if (isColorDark(newColor)) {
+                  setStrokeColor('#FFFFFF');
+                } else {
+                  setStrokeColor('#0F172A');
+                }
+              }}
+              className="w-8 h-8 rounded-lg cursor-pointer border border-neutral-300 p-0"
+              title="Выбрать любой цвет"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Popover: Cover Color Selector */}
+      {isCoverPopoverOpen && (
+        <div 
+          data-popover="true"
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute right-8 top-24 p-4 rounded-2xl shadow-2xl z-50 w-80 animate-in fade-in slide-in-from-top-2 duration-150 border ${
+            isDark
+              ? 'bg-[#181922] border-neutral-700 text-white'
+              : 'bg-white border-neutral-200 text-neutral-900'
+          }`}
+        >
+          <span className={`text-xs font-bold block mb-2.5 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+            Цвет обложки тетради:
+          </span>
+
+          <div className="grid grid-cols-2 gap-2 mb-3.5 max-h-64 overflow-y-auto pr-1">
+            {COVER_PRESETS.map((c) => {
+              const isSelected = notebook.coverColor.toLowerCase() === c.color.toLowerCase();
+              return (
+                <button
+                  key={c.color}
+                  onClick={() => {
+                    onUpdateNotebook({ ...notebook, coverColor: c.color });
+                    setIsCoverPopoverOpen(false);
+                  }}
+                  className={`p-2 rounded-xl border text-left flex items-center gap-2.5 transition-all ${
+                    isSelected
+                      ? isDark
+                        ? 'border-[#6355C7] bg-[#252238] ring-2 ring-[#6355C7]'
+                        : 'border-2 border-[#6355C7] bg-white ring-2 ring-[#EFEAFD] shadow-xs'
+                      : isDark
+                        ? 'border-neutral-700 hover:bg-neutral-800'
+                        : 'border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 bg-white shadow-2xs'
+                  }`}
+                >
+                  <span
+                    className="w-6 h-6 rounded-lg border-2 border-white/80 dark:border-neutral-700 shadow-sm shrink-0"
+                    style={{ backgroundColor: c.color }}
+                  />
+                  <span className={`text-[11px] font-bold truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+                    {c.name}
+                  </span>
+                  {isSelected && <Check className="w-3.5 h-3.5 text-[#6355C7] ml-auto shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className={`pt-2.5 border-t flex items-center justify-between ${
+            isDark ? 'border-neutral-800' : 'border-neutral-200'
+          }`}>
+            <span className={`text-xs font-semibold ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>Свой оттенок:</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={notebook.coverColor}
+                onChange={(e) => onUpdateNotebook({ ...notebook, coverColor: e.target.value })}
+                className="w-8 h-8 rounded-lg cursor-pointer border border-neutral-300 p-0"
+                title="Выбрать любой цвет"
+              />
+              <span className={`font-mono text-xs font-bold ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>
+                {notebook.coverColor.toUpperCase()}
+              </span>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal: Export */}
@@ -2427,17 +2330,17 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                 }}
                 className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between group ${
                   isDark
-                    ? 'border-neutral-700 hover:border-blue-500 bg-neutral-800/40 text-white'
-                    : 'border-neutral-200 hover:border-blue-500 bg-white text-neutral-900 shadow-2xs'
+                    ? 'border-neutral-700 hover:border-[#6355C7] bg-neutral-800/40 text-white'
+                    : 'border-neutral-200 hover:border-[#6355C7] bg-white text-neutral-900 shadow-2xs'
                 }`}
               >
                 <div>
-                  <div className={`font-bold group-hover:text-blue-600 ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+                  <div className={`font-bold group-hover:text-[#6355C7] ${isDark ? 'text-white' : 'text-neutral-900'}`}>
                     Файл .noto
                   </div>
                   <div className={`text-[11px] ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>Векторный проект тетради</div>
                 </div>
-                <Download className="w-4 h-4 text-blue-600" />
+                <Download className="w-4 h-4 text-[#6355C7]" />
               </button>
 
               <button
@@ -2495,3 +2398,4 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     </div>
   );
 };
+

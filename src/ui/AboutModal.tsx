@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Monitor, Smartphone, Cpu, HardDrive, Cloud } from 'lucide-react';
+import { NotoIcon } from './NotoLogo';
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -14,13 +15,16 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
       <div className="bg-white dark:bg-neutral-900 rounded-2xl w-full max-w-lg p-6 shadow-2xl border border-neutral-200/80 dark:border-neutral-800/80 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-neutral-100 dark:border-neutral-800 shrink-0">
-          <div>
-            <h3 className="font-semibold text-sm text-neutral-900 dark:text-white">
-              Noto — Your digital notebook
-            </h3>
-            <p className="text-[11px] text-neutral-400">
-              Версия 1.0.0 (Standalone Desktop & Mobile Core)
-            </p>
+          <div className="flex items-center gap-2.5">
+            <NotoIcon size={32} />
+            <div>
+              <h3 className="font-semibold text-sm text-neutral-900 dark:text-white">
+                Noto — Your digital notebook
+              </h3>
+              <p className="text-[11px] text-neutral-400">
+                Версия 1.0.0 (Standalone Desktop & Mobile Core)
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}

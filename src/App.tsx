@@ -4,7 +4,6 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TitleBar } from './ui/TitleBar';
 import { MenuBar } from './ui/MenuBar';
 import { LibraryView } from './ui/LibraryView';
 import { EditorWorkspace } from './ui/EditorWorkspace';
@@ -26,7 +25,8 @@ import {
   dbGetSettings, 
   dbSaveSettings,
   DEFAULT_SETTINGS,
-  DEFAULT_PAGE_BACKGROUND
+  DEFAULT_PAGE_BACKGROUND,
+  getStandardPageDimensions
 } from './storage/db';
 import { importNotoFile, exportToNotoFile, exportNotebookToPdf, exportPageAsImage } from './export/exporter';
 
@@ -40,6 +40,14 @@ export default function App() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // View scaling & Menu bar triggers
+  const [libraryZoom, setLibraryZoom] = useState(1.0);
+  const [editorZoomAction, setEditorZoomAction] = useState<{ type: 'in' | 'out' | 'reset'; timestamp: number } | null>(null);
+  const [undoTrigger, setUndoTrigger] = useState<number>(0);
+  const [redoTrigger, setRedoTrigger] = useState<number>(0);
+  const [clearPageTrigger, setClearPageTrigger] = useState<number>(0);
+  const [paperTypeTrigger, setPaperTypeTrigger] = useState<{ type: GridType; timestamp: number } | null>(null);
 
   // Autosave timer
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -114,6 +122,7 @@ export default function App() {
   // Quick create notebook (Instant 1-click creation directly into full-screen editor)
   const handleQuickCreateNotebook = () => {
     const newPageId = `page_${Date.now()}`;
+    const dim = getStandardPageDimensions('grid', false);
     const newNb: Notebook = {
       id: `nb_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
       title: `Тетрадь ${notebooks.length + 1}`,
@@ -125,12 +134,12 @@ export default function App() {
           id: newPageId,
           title: 'Страница 1',
           order: 0,
-          width: 2200,
-          height: 7500,
+          width: dim.width,
+          height: dim.height,
           background: {
             color: '#FFFFFF',
             type: 'grid',
-            gridSize: 25,
+            gridSize: 24,
             gridColor: '#3B82F6',
             gridOpacity: 0.9,
             lineWidth: 1,
@@ -166,6 +175,7 @@ export default function App() {
     paperType: GridType;
   }) => {
     const newPageId = `page_${Date.now()}`;
+    const dim = getStandardPageDimensions(data.paperType, false);
     const newNb: Notebook = {
       id: `nb_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
       title: data.title,
@@ -177,8 +187,8 @@ export default function App() {
           id: newPageId,
           title: 'Страница 1',
           order: 0,
-          width: 2200,
-          height: 7500,
+          width: dim.width,
+          height: dim.height,
           background: {
             ...DEFAULT_PAGE_BACKGROUND,
             type: data.paperType,
@@ -281,12 +291,15 @@ export default function App() {
     if (!activeNotebook) return;
     const newPageId = `page_${Date.now()}`;
     const firstPage = activeNotebook.pages[0];
+    const paperType = firstPage ? firstPage.background.type : 'grid';
+    const isLand = firstPage ? firstPage.width > firstPage.height : false;
+    const dim = getStandardPageDimensions(paperType, isLand);
     const newPage = {
       id: newPageId,
       title: `Страница ${activeNotebook.pages.length + 1}`,
       order: activeNotebook.pages.length,
-      width: firstPage?.width || 1400,
-      height: firstPage?.height || 1900,
+      width: dim.width,
+      height: dim.height,
       background: firstPage ? { ...firstPage.background } : DEFAULT_PAGE_BACKGROUND,
       strokes: [],
       shapes: [],
@@ -321,6 +334,54 @@ export default function App() {
     }
   };
 
+  // Zoom handling for both Library and Editor
+  const handleZoom = useCallback((delta: number) => {
+    if (activeNotebookId) {
+      setEditorZoomAction({ type: delta > 0 ? 'in' : 'out', timestamp: Date.now() });
+    } else {
+      setLibraryZoom((prev) => {
+        const next = Math.min(1.6, Math.max(0.65, +(prev + (delta > 0 ? 0.15 : -0.15)).toFixed(2)));
+        showToast(`Масштаб библиотеки: ${Math.round(next * 100)}%`);
+        return next;
+      });
+    }
+  }, [activeNotebookId]);
+
+  const handleResetZoom = useCallback(() => {
+    if (activeNotebookId) {
+      setEditorZoomAction({ type: 'reset', timestamp: Date.now() });
+    } else {
+      setLibraryZoom(1.0);
+      showToast('Масштаб библиотеки: 100%');
+    }
+  }, [activeNotebookId]);
+
+  // Global Keyboard shortcuts for View Zoom (Ctrl/Cmd +, -, 0)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) {
+        return;
+      }
+
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          handleZoom(0.15);
+        } else if (e.key === '-') {
+          e.preventDefault();
+          handleZoom(-0.15);
+        } else if (e.key === '0') {
+          e.preventDefault();
+          handleResetZoom();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleZoom, handleResetZoom]);
+
   return (
     <div 
       data-theme={settings.theme}
@@ -330,20 +391,12 @@ export default function App() {
           : 'bg-[#F8FAFC] text-neutral-900'
       }`}
     >
-      {/* Native Desktop OS Window Titlebar */}
-      <TitleBar
-        documentTitle={activeNotebook ? activeNotebook.title : 'Библиотека конспектов'}
-        isSaving={isSaving}
-        theme={settings.theme === 'dark' ? 'dark' : 'light'}
-        onToggleTheme={handleToggleTheme}
-        onCloseApp={() => {
-          if (activeNotebookId) setActiveNotebookId(null);
-        }}
-      />
-
-      {/* Standalone Desktop Menu Bar */}
+      {/* Desktop Menu Bar */}
       <MenuBar
         theme={settings.theme === 'dark' ? 'dark' : 'light'}
+        onToggleTheme={handleToggleTheme}
+        documentTitle={activeNotebook ? activeNotebook.title : 'Библиотека конспектов'}
+        isSaving={isSaving}
         onNewNotebook={handleQuickCreateNotebook}
         onNewPage={handleNewPage}
         onImportNoto={() => {
@@ -357,13 +410,14 @@ export default function App() {
           input.click();
         }}
         onExport={handleExport}
-        onUndo={() => {}}
-        onRedo={() => {}}
+        onUndo={() => setUndoTrigger(Date.now())}
+        onRedo={() => setRedoTrigger(Date.now())}
         canUndo={true}
         canRedo={true}
-        onClearPage={() => {}}
-        onZoom={() => {}}
-        onResetZoom={() => {}}
+        onClearPage={() => setClearPageTrigger(Date.now())}
+        onZoom={handleZoom}
+        onResetZoom={handleResetZoom}
+        onSetPaperType={(paperType) => setPaperTypeTrigger({ type: paperType, timestamp: Date.now() })}
         onSelectTool={() => {}}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onOpenAbout={() => setIsAboutOpen(true)}
@@ -378,6 +432,11 @@ export default function App() {
           onUpdateNotebook={handleUpdateNotebook}
           theme={settings.theme === 'dark' ? 'dark' : 'light'}
           onToggleTheme={handleToggleTheme}
+          zoomAction={editorZoomAction}
+          undoTrigger={undoTrigger}
+          redoTrigger={redoTrigger}
+          clearPageTrigger={clearPageTrigger}
+          paperTypeTrigger={paperTypeTrigger}
         />
       ) : (
         <LibraryView
@@ -398,6 +457,7 @@ export default function App() {
           }}
           theme={settings.theme === 'dark' ? 'dark' : 'light'}
           onToggleTheme={handleToggleTheme}
+          zoom={libraryZoom}
         />
       )}
 

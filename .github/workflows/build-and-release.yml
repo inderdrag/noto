@@ -1,4 +1,4 @@
-name: Build & Release Нота
+name: Build & Release Noto
 
 on:
   push:
@@ -51,8 +51,8 @@ jobs:
         with:
           files: release/*.exe
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
-          name: "Нота ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }} — Windows Установщик"
-          body: "Скачайте установщик Noto-Setup-1.0.0.exe для быстрой установки приложения Нота на компьютер Windows."
+          name: "Noto ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }} — Windows Установщик"
+          body: "Скачайте установщик Noto-Setup-1.0.0.exe для быстрой установки приложения Noto на компьютер Windows."
           draft: false
           prerelease: false
         env:

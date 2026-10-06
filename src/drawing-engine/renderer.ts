@@ -42,7 +42,8 @@ export function renderBackground(
   width: number,
   height: number,
   bg: PageBackground,
-  _bounds?: { minX: number; minY: number; maxX: number; maxY: number }
+  _bounds?: { minX: number; minY: number; maxX: number; maxY: number },
+  pageOrderOrIndex: number = 0
 ) {
   const x0 = 0;
   const y0 = 0;
@@ -105,7 +106,7 @@ export function renderBackground(
       ctx.lineTo(x1, coord);
     }
     ctx.stroke();
-  } else if (bg.type === 'ruled') {
+  } else if (bg.type === 'ruled' || (bg.type as string) === 'lines') {
     ctx.beginPath();
     for (let y = y0; y <= y1; y += size) {
       const coord = Math.round(y) + offset;
@@ -114,8 +115,13 @@ export function renderBackground(
     }
     ctx.stroke();
 
-    // Red vertical margin line
-    const marginX = Math.min(100, Math.max(70, width * 0.1)) + offset;
+    // Alternating red vertical margin line:
+    // Odd pages (1, 3, 5... -> order 0, 2, 4): margin on the RIGHT
+    // Even pages (2, 4, 6... -> order 1, 3, 5): margin on the LEFT
+    const marginSpan = Math.min(110, Math.max(75, width * 0.12));
+    const isOddPage = (pageOrderOrIndex % 2 === 0);
+    const marginX = (isOddPage ? (width - marginSpan) : marginSpan) + offset;
+
     ctx.beginPath();
     ctx.strokeStyle = darkPaper ? '#F43F5E' : '#EF4444';
     ctx.globalAlpha = darkPaper ? 0.45 : 0.6;
@@ -439,21 +445,23 @@ export function renderImage(ctx: CanvasRenderingContext2D, imgObj: ImageObject) 
  * Renders selection bounding box and handles
  */
 export function renderSelectionBox(ctx: CanvasRenderingContext2D, sel: SelectionBox) {
+  if (!sel || sel.width <= 0 || sel.height <= 0) return;
   ctx.save();
-  ctx.strokeStyle = '#2563EB'; // Blue accent
+
+  // Subtle translucent fill to show draggable area
+  ctx.fillStyle = 'rgba(99, 85, 199, 0.06)';
+  ctx.fillRect(sel.x, sel.y, sel.width, sel.height);
+
+  // Dashed border
+  ctx.strokeStyle = '#6355C7'; // Brand purple
   ctx.lineWidth = 1.5;
-  ctx.setLineDash([4, 4]);
+  ctx.setLineDash([5, 5]);
   ctx.strokeRect(sel.x, sel.y, sel.width, sel.height);
 
+  // Solid corner handles
   ctx.setLineDash([]);
-  ctx.fillStyle = '#FFFFFF';
-  ctx.strokeStyle = '#2563EB';
-  ctx.lineWidth = 2;
+  const handleRadius = 5.5;
 
-  const handleSize = 8;
-  const half = handleSize / 2;
-
-  // 4 corners
   const corners = [
     { x: sel.x, y: sel.y },
     { x: sel.x + sel.width, y: sel.y },
@@ -462,8 +470,22 @@ export function renderSelectionBox(ctx: CanvasRenderingContext2D, sel: Selection
   ];
 
   corners.forEach((c) => {
-    ctx.fillRect(c.x - half, c.y - half, handleSize, handleSize);
-    ctx.strokeRect(c.x - half, c.y - half, handleSize, handleSize);
+    // Outer white disc with shadow
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, handleRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Purple border
+    ctx.strokeStyle = '#6355C7';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Inner purple point
+    ctx.fillStyle = '#6355C7';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
   });
 
   ctx.restore();
@@ -484,7 +506,7 @@ export function renderPage(
   }
 ) {
   // 1. Background (fills entire screen seamlessly if viewportBounds provided)
-  renderBackground(ctx, page.width, page.height, page.background, options?.viewportBounds);
+  renderBackground(ctx, page.width, page.height, page.background, options?.viewportBounds, page.order ?? 0);
 
   // 2. Images (rendered underneath annotations)
   if (page.images) {
