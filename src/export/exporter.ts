@@ -2,12 +2,93 @@ import { Notebook, NotoFileFormat, Page } from '../types';
 import { renderPage } from '../drawing-engine/renderer';
 import { jsPDF } from 'jspdf';
 import { normalizeNotebook } from '../storage/migration';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 
 /**
- * Triggers a browser/system file download for a blob or data
+ * Converts a string or Blob to a base64 encoded string
  */
-export function downloadFile(content: string | Blob, filename: string, mimeType: string = 'application/octet-stream') {
+async function contentToBase64(content: string | Blob): Promise<string> {
+  if (typeof content === 'string') {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(content);
+    let binary = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const commaIdx = dataUrl.indexOf(',');
+      resolve(commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl);
+    };
+    reader.readAsDataURL(content);
+  });
+}
+
+/**
+ * Triggers a browser/system file download on desktop,
+ * or native save/share sheet on mobile devices (Android/iOS/PWA).
+ */
+export async function downloadFile(
+  content: string | Blob,
+  filename: string,
+  mimeType: string = 'application/octet-stream'
+): Promise<void> {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
+
+  // 1. Native Mobile (Capacitor Android / iOS)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const base64Data = await contentToBase64(content);
+      const fileResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: Directory.Cache,
+      });
+
+      await Share.share({
+        title: filename,
+        text: `Файл: ${filename}`,
+        url: fileResult.uri,
+        dialogTitle: `Сохранить или отправить ${filename}`,
+      });
+      return;
+    } catch (err) {
+      console.warn('Capacitor native export failed, falling back to web methods:', err);
+    }
+  }
+
+  // 2. Mobile Browser Web Share API (if supported)
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.share === 'function' &&
+    typeof navigator.canShare === 'function' &&
+    typeof File !== 'undefined'
+  ) {
+    try {
+      const file = new File([blob], filename, { type: mimeType });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: filename,
+        });
+        return;
+      }
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      console.warn('Web Share API error, falling back to download link:', err);
+    }
+  }
+
+  // 3. Desktop / Browser Classic Download (<a download>)
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -15,13 +96,13 @@ export function downloadFile(content: string | Blob, filename: string, mimeType:
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 /**
  * Exports a notebook into native .noto format (v1.1.0)
  */
-export function exportToNotoFile(notebook: Notebook): void {
+export async function exportToNotoFile(notebook: Notebook): Promise<void> {
   const normalized = normalizeNotebook(notebook);
   const fileData: NotoFileFormat = {
     version: '1.1.0',
@@ -35,7 +116,7 @@ export function exportToNotoFile(notebook: Notebook): void {
 
   const json = JSON.stringify(fileData, null, 2);
   const safeTitle = notebook.title.replace(/[^a-zA-Z0-9а-яА-ЯёЁ_-]/g, '_') || 'notebook';
-  downloadFile(json, `${safeTitle}.noto`, 'application/json');
+  await downloadFile(json, `${safeTitle}.noto`, 'application/json');
 }
 
 /**
@@ -96,16 +177,22 @@ export function renderPageToCanvas(page: Page, scale: number = 1): HTMLCanvasEle
 /**
  * Exports single page to PNG or JPG
  */
-export function exportPageAsImage(page: Page, format: 'png' | 'jpeg', filename?: string): void {
+export async function exportPageAsImage(page: Page, format: 'png' | 'jpeg', filename?: string): Promise<void> {
   const canvas = renderPageToCanvas(page, 1.5); // High DPI crisp rasterization
   const mime = format === 'png' ? 'image/png' : 'image/jpeg';
   const ext = format === 'png' ? 'png' : 'jpg';
 
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    const safeTitle = (filename || page.title || 'page').replace(/[^a-zA-Z0-9а-яА-ЯёЁ_-]/g, '_');
-    downloadFile(blob, `${safeTitle}.${ext}`, mime);
-  }, mime, 0.92);
+  return new Promise((resolve) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        resolve();
+        return;
+      }
+      const safeTitle = (filename || page.title || 'page').replace(/[^a-zA-Z0-9а-яА-ЯёЁ_-]/g, '_');
+      await downloadFile(blob, `${safeTitle}.${ext}`, mime);
+      resolve();
+    }, mime, 0.92);
+  });
 }
 
 /**
@@ -145,5 +232,6 @@ export async function exportNotebookToPdf(
   }
 
   const safeTitle = notebook.title.replace(/[^a-zA-Z0-9а-яА-ЯёЁ_-]/g, '_') || 'notebook';
-  pdf.save(`${safeTitle}.pdf`);
+  const pdfBlob = pdf.output('blob');
+  await downloadFile(pdfBlob, `${safeTitle}.pdf`, 'application/pdf');
 }
