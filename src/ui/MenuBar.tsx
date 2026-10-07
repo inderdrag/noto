@@ -15,7 +15,10 @@ import {
   Grid,
   Sparkles,
   Sun,
-  Moon
+  Moon,
+  Cloud,
+  CloudOff,
+  RotateCw
 } from 'lucide-react';
 import { ToolType, GridType } from '../types';
 import { NotoIcon } from './NotoLogo';
@@ -25,6 +28,9 @@ interface MenuBarProps {
   onToggleTheme?: () => void;
   documentTitle?: string;
   isSaving?: boolean;
+  onOpenAuth?: () => void;
+  syncStatus?: { isOnline: boolean; isSyncing: boolean; pendingChangesCount: number };
+  userEmail?: string | null;
   onNewNotebook: () => void;
   onNewPage: () => void;
   onImportNoto: () => void;
@@ -48,6 +54,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onToggleTheme,
   documentTitle,
   isSaving = false,
+  onOpenAuth,
+  syncStatus,
+  userEmail,
   onNewNotebook,
   onNewPage,
   onImportNoto,
@@ -108,7 +117,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   return (
     <nav 
       ref={menuRef} 
-      className={`h-8 border-b flex items-center justify-between px-3 text-[11px] select-none relative z-40 transition-colors ${navClass}`}
+      className={`min-h-[32px] pt-safe pl-safe pr-safe border-b flex items-center justify-between px-3 text-[11px] select-none relative z-40 transition-colors ${navClass}`}
     >
       <div className="flex items-center gap-1">
         <div className="flex items-center gap-1.5 mr-2 pr-2.5 border-r border-neutral-200 dark:border-neutral-800 font-bold tracking-tight">
@@ -326,6 +335,33 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <span className={isDark ? 'text-neutral-500' : 'text-neutral-400'}>Сохранено</span>
             )}
           </span>
+        )}
+
+        {onOpenAuth && (
+          <button
+            onClick={onOpenAuth}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] transition-colors cursor-pointer ${
+              isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
+            }`}
+            title={userEmail ? `Синхронизация (${userEmail})` : 'Войти для облачной синхронизации'}
+          >
+            {syncStatus?.isSyncing ? (
+              <RotateCw className="w-3.5 h-3.5 text-blue-500 animate-spin" />
+            ) : syncStatus?.isOnline && userEmail ? (
+              <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+            ) : !syncStatus?.isOnline ? (
+              <CloudOff className="w-3.5 h-3.5 text-amber-500" />
+            ) : (
+              <Cloud className="w-3.5 h-3.5 text-neutral-400" />
+            )}
+            <span className="hidden md:inline text-[10px]">
+              {syncStatus?.isSyncing
+                ? 'Синхронизация...'
+                : userEmail
+                ? 'Облако'
+                : 'Синхронизация'}
+            </span>
+          </button>
         )}
 
         {onToggleTheme && (

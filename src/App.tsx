@@ -29,6 +29,10 @@ import {
   getStandardPageDimensions
 } from './storage/db';
 import { importNotoFile, exportToNotoFile, exportNotebookToPdf, exportPageAsImage } from './export/exporter';
+import { App as CapacitorApp } from '@capacitor/app';
+import { AuthModal } from './ui/AuthModal';
+import { syncManager, SyncStatus } from './sync/syncManager';
+import { authManager, UserProfile } from './auth/authManager';
 
 export default function App() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -39,7 +43,24 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(syncManager.getStatus());
+  const [userProfile, setUserProfile] = useState<UserProfile>(authManager.getUser());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Sync with authManager & syncManager
+  useEffect(() => {
+    const unsubSync = syncManager.subscribe(setSyncStatus);
+    const unsubAuth = authManager.subscribe(setUserProfile);
+    syncManager.setOnRemoteUpdate(() => {
+      dbGetAllNotebooks().then(setNotebooks);
+      dbGetFolders().then(setFolders);
+    });
+    return () => {
+      unsubSync();
+      unsubAuth();
+    };
+  }, []);
 
   // View scaling & Menu bar triggers
   const [libraryZoom, setLibraryZoom] = useState(1.0);
@@ -71,10 +92,18 @@ export default function App() {
         setFolders(loadedFolders);
         setSettings(loadedSettings);
 
+        // Request storage persistence to protect offline data on Android and Web
+        if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.persist === 'function') {
+          navigator.storage.persist().catch(() => {});
+        }
+
         const hasSeenWelcome = localStorage.getItem('noto_seen_welcome');
         if (!hasSeenWelcome) {
           setShowWelcome(true);
         }
+
+        // Trigger cloud sync on app start if user is authenticated
+        syncManager.syncNow();
       } catch (err) {
         console.error('Initialization error:', err);
       }
@@ -116,6 +145,8 @@ export default function App() {
     saveTimeoutRef.current = setTimeout(async () => {
       await dbSaveNotebook(updated);
       setIsSaving(false);
+      // Trigger debounced cloud synchronization (600ms)
+      syncManager.scheduleSync(updated);
     }, 600);
   }, []);
 
@@ -150,6 +181,7 @@ export default function App() {
           images: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
+          deleted: false,
         },
       ],
       currentPageId: newPageId,
@@ -199,6 +231,7 @@ export default function App() {
           images: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
+          deleted: false,
         },
       ],
       currentPageId: newPageId,
@@ -382,10 +415,61 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleZoom, handleResetZoom]);
 
+  // Android hardware back button & mobile history navigation
+  useEffect(() => {
+    let removeListener: (() => void) | undefined;
+
+    const setupBackHandler = async () => {
+      try {
+        const listener = await CapacitorApp.addListener('backButton', () => {
+          if (isShortcutsOpen) {
+            setIsShortcutsOpen(false);
+            return;
+          }
+          if (isAboutOpen) {
+            setIsAboutOpen(false);
+            return;
+          }
+          if (activeNotebookId) {
+            setActiveNotebookId(null);
+            return;
+          }
+          CapacitorApp.exitApp();
+        });
+        removeListener = () => listener.remove();
+      } catch {
+        // Not in Capacitor environment, ignore
+      }
+    };
+
+    setupBackHandler();
+
+    const handlePopState = () => {
+      if (isShortcutsOpen) {
+        setIsShortcutsOpen(false);
+        return;
+      }
+      if (isAboutOpen) {
+        setIsAboutOpen(false);
+        return;
+      }
+      if (activeNotebookId) {
+        setActiveNotebookId(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      if (removeListener) removeListener();
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [isShortcutsOpen, isAboutOpen, activeNotebookId]);
+
   return (
     <div 
       data-theme={settings.theme}
-      className={`w-screen h-screen flex flex-col overflow-hidden font-sans transition-colors ${
+      className={`fixed inset-0 w-full h-[100dvh] flex flex-col overflow-hidden font-sans transition-colors ${
         settings.theme === 'dark' 
           ? 'bg-[#0E0F14] text-neutral-100 dark' 
           : 'bg-[#F8FAFC] text-neutral-900'
@@ -397,6 +481,9 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
         documentTitle={activeNotebook ? activeNotebook.title : 'Библиотека конспектов'}
         isSaving={isSaving}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        syncStatus={syncStatus}
+        userEmail={userProfile.email}
         onNewNotebook={handleQuickCreateNotebook}
         onNewPage={handleNewPage}
         onImportNoto={() => {
@@ -458,6 +545,7 @@ export default function App() {
           theme={settings.theme === 'dark' ? 'dark' : 'light'}
           onToggleTheme={handleToggleTheme}
           zoom={libraryZoom}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
         />
       )}
 
@@ -467,6 +555,13 @@ export default function App() {
           {toastMessage}
         </div>
       )}
+
+      {/* Cloud Auth & Supabase Sync Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        theme={settings.theme}
+      />
 
       {/* Keyboard Shortcuts Modal */}
       <ShortcutsModal

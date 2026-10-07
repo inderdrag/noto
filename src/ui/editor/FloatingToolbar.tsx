@@ -63,7 +63,7 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
   const isShapeTool = ['rect', 'circle', 'triangle', 'star', 'line', 'arrow'].includes(activeTool);
 
   return (
-    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-auto transition-all duration-200">
+    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-auto transition-all duration-200 max-w-[calc(100vw-16px)]">
       {isCollapsed ? (
         /* Subtle, very pleasant expand button without text */
         <button
@@ -79,7 +79,7 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
         </button>
       ) : (
         /* Main Pill Dock */
-        <div className={`px-2 py-1.5 rounded-2xl border shadow-md flex items-center gap-1 animate-in fade-in zoom-in-95 duration-150 ${
+        <div className={`px-2 py-1.5 rounded-2xl border shadow-md flex items-center gap-1 animate-in fade-in zoom-in-95 duration-150 max-w-[calc(100vw-24px)] overflow-x-auto ${
           isDark ? 'bg-[#161726] border-neutral-800 text-neutral-200' : 'bg-white border-[#E8E9F2] text-neutral-700'
         }`}>
           {tools.map((t) => {
@@ -100,7 +100,7 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
                     }
                   }
                 }}
-                className={`px-3 py-1 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+                className={`px-2.5 sm:px-3 py-1 rounded-xl text-xs font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                   isActive
                     ? 'bg-[#6355C7] text-white font-semibold shadow-xs'
                     : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'

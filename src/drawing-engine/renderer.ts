@@ -494,6 +494,66 @@ export function renderSelectionBox(ctx: CanvasRenderingContext2D, sel: Selection
 /**
  * Master render function for an entire page
  */
+/**
+ * Fast viewport intersection checks for culling off-screen elements
+ */
+function isStrokeInViewport(
+  s: Stroke,
+  vb: { minX: number; minY: number; maxX: number; maxY: number }
+): boolean {
+  if (!s.points || s.points.length === 0) return false;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < s.points.length; i++) {
+    const pt = s.points[i];
+    if (pt.x < minX) minX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  const halfW = (s.width || 3) / 2;
+  return !(
+    maxX + halfW < vb.minX ||
+    minX - halfW > vb.maxX ||
+    maxY + halfW < vb.minY ||
+    minY - halfW > vb.maxY
+  );
+}
+
+function isShapeInViewport(
+  sh: Shape,
+  vb: { minX: number; minY: number; maxX: number; maxY: number }
+): boolean {
+  const minX = Math.min(sh.x, sh.x + sh.width);
+  const maxX = Math.max(sh.x, sh.x + sh.width);
+  const minY = Math.min(sh.y, sh.y + sh.height);
+  const maxY = Math.max(sh.y, sh.y + sh.height);
+  return !(maxX < vb.minX || minX > vb.maxX || maxY < vb.minY || minY > vb.maxY);
+}
+
+function isTextInViewport(
+  t: TextObject,
+  vb: { minX: number; minY: number; maxX: number; maxY: number }
+): boolean {
+  const w = t.width || 250;
+  const h = t.height || 50;
+  return !(t.x + w < vb.minX || t.x > vb.maxX || t.y + h < vb.minY || t.y > vb.maxY);
+}
+
+function isImageInViewport(
+  img: ImageObject,
+  vb: { minX: number; minY: number; maxX: number; maxY: number }
+): boolean {
+  return !(
+    img.x + img.width < vb.minX ||
+    img.x > vb.maxX ||
+    img.y + img.height < vb.minY ||
+    img.y > vb.maxY
+  );
+}
+
 export function renderPage(
   ctx: CanvasRenderingContext2D,
   page: Page,
@@ -505,34 +565,45 @@ export function renderPage(
     viewportBounds?: { minX: number; minY: number; maxX: number; maxY: number };
   }
 ) {
+  const vb = options?.viewportBounds;
+
   // 1. Background (fills entire screen seamlessly if viewportBounds provided)
   renderBackground(ctx, page.width, page.height, page.background, options?.viewportBounds, page.order ?? 0);
 
   // 2. Images (rendered underneath annotations)
   if (page.images) {
     for (const img of page.images) {
-      renderImage(ctx, img);
+      if (!img.deleted && (!vb || isImageInViewport(img, vb))) {
+        renderImage(ctx, img);
+      }
     }
   }
 
   // 3. Shapes
   if (page.shapes) {
     for (const shape of page.shapes) {
-      renderShape(ctx, shape);
+      if (!shape.deleted && (!vb || isShapeInViewport(shape, vb))) {
+        renderShape(ctx, shape);
+      }
     }
   }
 
   // 4. Texts
   if (page.texts) {
     for (const text of page.texts) {
-      renderText(ctx, text);
+      if (!text.deleted && (!vb || isTextInViewport(text, vb))) {
+        renderText(ctx, text);
+      }
     }
   }
 
-  // 5. Strokes (markers first, then pens/pencils for crisp layering)
+  // 5. Strokes (markers first, then pens/pencils for crisp layering with viewport culling)
   if (page.strokes) {
-    const markers = page.strokes.filter((s) => s.tool === 'marker');
-    const others = page.strokes.filter((s) => s.tool !== 'marker');
+    const activeStrokes = page.strokes.filter(
+      (s) => !s.deleted && (!vb || isStrokeInViewport(s, vb))
+    );
+    const markers = activeStrokes.filter((s) => s.tool === 'marker');
+    const others = activeStrokes.filter((s) => s.tool !== 'marker');
 
     for (const m of markers) {
       renderStroke(ctx, m, options?.pressureEnabled ?? true);

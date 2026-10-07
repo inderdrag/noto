@@ -1,0 +1,131 @@
+name: Build & Release Android (APK & AAB)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build & Sign Android APK & AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          npm install --legacy-peer-deps
+
+      - name: Build web application
+        run: npm run build
+
+      - name: Sync Capacitor Android
+        run: npm run cap:sync
+
+      - name: Grant execute permissions for Gradle
+        run: chmod +x android/gradlew
+
+      - name: Build Android Release (APK & AAB)
+        run: |
+          cd android
+          ./gradlew assembleRelease bundleRelease --stacktrace
+
+      - name: Sign APK and AAB
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          mkdir -p release-artifacts
+
+          # 1. Prepare keystore from GitHub Secrets or create self-signed fallback
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Using keystore from GitHub Secrets..."
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+            KEY_FILE="release.keystore"
+            KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
+            K_ALIAS="${ANDROID_KEY_ALIAS}"
+            K_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          else
+            echo "::warning::No keystore secret found in GitHub Secrets. Using generated release key."
+            keytool -genkeypair -v -keystore release.keystore -alias noto-key -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass notoreleasepass -keypass notoreleasepass \
+              -dname "CN=Noto Digital Notebook, OU=Mobile, O=Noto, L=Worldwide, C=US"
+            KEY_FILE="release.keystore"
+            KS_PASS="notoreleasepass"
+            K_ALIAS="noto-key"
+            K_PASS="notoreleasepass"
+          fi
+
+          # 2. Find Android build-tools (apksigner & zipalign)
+          BUILD_TOOLS_DIR=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          echo "Found Android build-tools: $BUILD_TOOLS_DIR"
+
+          # 3. Align and Sign APK
+          RAW_APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -f "$RAW_APK" ]; then
+            echo "Processing APK: $RAW_APK"
+            $BUILD_TOOLS_DIR/zipalign -v -p 4 "$RAW_APK" release-artifacts/Noto-aligned.apk || cp "$RAW_APK" release-artifacts/Noto-aligned.apk
+            $BUILD_TOOLS_DIR/apksigner sign --ks "$KEY_FILE" --ks-pass "pass:$KS_PASS" --ks-key-alias "$K_ALIAS" --key-pass "pass:$K_PASS" --out release-artifacts/Noto.apk release-artifacts/Noto-aligned.apk
+            rm -f release-artifacts/Noto-aligned.apk
+            $BUILD_TOOLS_DIR/apksigner verify release-artifacts/Noto.apk
+            echo "APK successfully signed: release-artifacts/Noto.apk"
+          else
+            echo "Error: Release APK not found!" && exit 1
+          fi
+
+          # 4. Sign AAB with jarsigner
+          RAW_AAB=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          if [ -f "$RAW_AAB" ]; then
+            echo "Processing AAB: $RAW_AAB"
+            cp "$RAW_AAB" release-artifacts/Noto.aab
+            jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore "$KEY_FILE" -storepass "$KS_PASS" -keypass "$K_PASS" release-artifacts/Noto.aab "$K_ALIAS"
+            jarsigner -verify -verbose -certs release-artifacts/Noto.aab
+            echo "AAB successfully signed: release-artifacts/Noto.aab"
+          else
+            echo "Error: Release AAB not found!" && exit 1
+          fi
+
+          rm -f release.keystore
+
+      - name: Upload Artifacts (APK & AAB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: noto-android-release
+          path: |
+            release-artifacts/Noto.apk
+            release-artifacts/Noto.aab
+          if-no-files-found: error
+
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/Noto.apk
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          name: "Noto"
+          body: "Релиз приложения Noto для Android. Скачайте Noto.apk для установки на телефон или планшет."
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

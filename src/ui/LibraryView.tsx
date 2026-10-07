@@ -11,7 +11,8 @@ import {
   UploadCloud,
   Check,
   FolderPlus,
-  ArrowUpDown
+  ArrowUpDown,
+  Cloud
 } from 'lucide-react';
 import { Notebook, Folder } from '../types';
 import { exportToNotoFile } from '../export/exporter';
@@ -33,6 +34,7 @@ interface LibraryViewProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   zoom?: number;
+  onOpenAuth?: () => void;
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
@@ -49,6 +51,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onToggleTheme,
   onCreateFolder,
   zoom = 1,
+  onOpenAuth,
 }) => {
   const [selectedFolderId, setSelectedFolderId] = useState<string | 'all'>('all');
   const [activeTab, setActiveTab] = useState<'all' | 'favorites'>('all');
@@ -81,7 +84,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   const totalPages = useMemo(() => {
-    return notebooks.reduce((acc, nb) => acc + nb.pages.length, 0);
+    return notebooks.reduce((acc, nb) => acc + (nb.pages ? nb.pages.filter((p) => !p.deleted).length : 0), 0);
   }, [notebooks]);
 
   // Filter & Sort notebooks
@@ -93,7 +96,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchesTitle = nb.title.toLowerCase().includes(q);
-          const matchesPages = nb.pages.some((p) => p.title.toLowerCase().includes(q));
+          const matchesPages = (nb.pages || []).some((p) => !p.deleted && p.title.toLowerCase().includes(q));
           if (!matchesTitle && !matchesPages) return false;
         }
         return true;
@@ -103,7 +106,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           return a.title.localeCompare(b.title, 'ru');
         }
         if (sortBy === 'pages') {
-          return b.pages.length - a.pages.length;
+          const aPages = (a.pages || []).filter((p) => !p.deleted).length;
+          const bPages = (b.pages || []).filter((p) => !p.deleted).length;
+          return bPages - aPages;
         }
         return b.updatedAt - a.updatedAt;
       });
@@ -117,19 +122,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
   const recentPage = useMemo(() => {
     if (!recentNotebook) return null;
-    const cur = recentNotebook.pages.find((p) => p.id === recentNotebook.currentPageId);
-    return cur || recentNotebook.pages[0] || null;
+    const activePages = (recentNotebook.pages || []).filter((p) => !p.deleted);
+    const cur = activePages.find((p) => p.id === recentNotebook.currentPageId);
+    return cur || activePages[0] || null;
   }, [recentNotebook]);
 
   // Dynamic extraction of the latest notes / text lines written on the sheet
   const recentSnippets = useMemo(() => {
     if (!recentNotebook) return [];
-    const page = recentPage || recentNotebook.pages[0];
+    const activePages = (recentNotebook.pages || []).filter((p) => !p.deleted);
+    const page = recentPage || activePages[0];
     if (!page) return [recentNotebook.title];
 
-    if (page.texts && page.texts.length > 0) {
+    const activeTexts = (page.texts || []).filter((t) => !t.deleted);
+    if (activeTexts.length > 0) {
       const allLines: string[] = [];
-      const sortedTexts = [...page.texts].sort((a, b) => (a.y || 0) - (b.y || 0));
+      const sortedTexts = [...activeTexts].sort((a, b) => (a.y || 0) - (b.y || 0));
       for (const t of sortedTexts) {
         if (t.text) {
           const lines = t.text.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -141,8 +149,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       }
     }
 
-    if (page.strokes && page.strokes.length > 0) {
-      return [page.title || recentNotebook.title, `Штрихов на листе: ${page.strokes.length}`];
+    const activeStrokes = (page.strokes || []).filter((s) => !s.deleted);
+    if (activeStrokes.length > 0) {
+      return [page.title || recentNotebook.title, `Штрихов на листе: ${activeStrokes.length}`];
     }
 
     return [page.title || recentNotebook.title, 'Чистый лист'];
@@ -206,20 +215,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       />
 
       {/* Main Navigation Header */}
-      <header className={`h-16 px-8 flex items-center justify-between shrink-0 border-b ${
+      <header className={`min-h-[56px] px-4 sm:px-8 pl-safe pr-safe flex items-center justify-between shrink-0 border-b gap-3 ${
         isDark ? 'bg-[#12131F] border-neutral-800' : 'bg-white border-[#EAEBF2]'
       }`}>
-        <div className="flex items-center gap-8">
+        <div className="flex items-center gap-4 sm:gap-8">
           {/* Logo */}
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveTab('all')}>
-            <NotoIcon size={26} color="#6355C7" />
-            <span className="font-bold tracking-tight text-xl text-neutral-900 dark:text-white">
+            <NotoIcon size={24} color="#6355C7" />
+            <span className="font-bold tracking-tight text-lg sm:text-xl text-neutral-900 dark:text-white">
               Noto
             </span>
           </div>
 
           {/* Navigation Tabs */}
-          <nav className="flex items-center gap-6 text-sm">
+          <nav className="flex items-center gap-3 sm:gap-6 text-xs sm:text-sm">
             <button
               onClick={() => setActiveTab('all')}
               className={`font-medium transition-colors cursor-pointer ${
@@ -238,7 +247,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
               }`}
             >
-              Избранное
+              <span>Избранное</span>
               {notebooks.filter((n) => n.favorite).length > 0 && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#EFEAFD] text-[#6355C7] dark:bg-neutral-800 font-semibold">
                   {notebooks.filter((n) => n.favorite).length}
@@ -264,10 +273,24 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
 
         {/* Right Action buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {onOpenAuth && (
+            <button
+              onClick={onOpenAuth}
+              className={`p-2 rounded-full border transition-all cursor-pointer flex items-center justify-center text-xs ${
+                isDark
+                  ? 'bg-[#181928] border-neutral-700 text-neutral-300 hover:text-white hover:bg-neutral-800'
+                  : 'bg-white border-[#E0E2EC] text-neutral-700 hover:bg-neutral-50 shadow-2xs'
+              }`}
+              title="Облачная синхронизация и аккаунт"
+            >
+              <Cloud className="w-4 h-4 text-[#6355C7]" />
+            </button>
+          )}
+
           <button
             onClick={() => fileInputRef.current?.click()}
-            className={`px-5 py-2 text-xs font-medium rounded-full border transition-all cursor-pointer ${
+            className={`px-3.5 sm:px-5 py-2 text-xs font-medium rounded-full border transition-all cursor-pointer ${
               isDark
                 ? 'bg-[#181928] border-neutral-700 text-neutral-200 hover:bg-neutral-800'
                 : 'bg-white border-[#E0E2EC] text-neutral-700 hover:bg-neutral-50 shadow-2xs'
@@ -277,16 +300,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </button>
           <button
             onClick={onQuickCreateNotebook}
-            className="px-5 py-2 text-xs font-semibold rounded-full bg-[#6355C7] hover:bg-[#5244B4] text-white transition-all shadow-sm cursor-pointer flex items-center gap-1.5 active:scale-98"
+            className="px-3.5 sm:px-5 py-2 text-xs font-semibold rounded-full bg-[#6355C7] hover:bg-[#5244B4] text-white transition-all shadow-sm cursor-pointer flex items-center gap-1.5 active:scale-98"
           >
-            Новая тетрадь
+            <span className="hidden xs:inline">+</span>
+            <span>Новая тетрадь</span>
           </button>
         </div>
       </header>
 
       {/* Main Scrollable Canvas / Viewport */}
       <div 
-        className="flex-1 overflow-y-auto px-8 py-8 max-w-7xl mx-auto w-full flex flex-col justify-between transition-all duration-150"
+        className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 sm:py-8 pl-safe pr-safe pb-safe max-w-7xl mx-auto w-full flex flex-col justify-between transition-all duration-150"
         style={{ zoom: zoom ? `${zoom}` : '1' }}
       >
         <div>
@@ -470,7 +494,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         )}
 
                         <div className="text-xs text-neutral-400 mt-1">
-                          {nb.pages.length} {nb.pages.length === 1 ? 'страница' : nb.pages.length < 5 ? 'страницы' : 'страниц'}
+                          {nb.pages ? nb.pages.filter((p) => !p.deleted).length : 0} {
+                            (nb.pages ? nb.pages.filter((p) => !p.deleted).length : 0) === 1
+                              ? 'страница'
+                              : (nb.pages ? nb.pages.filter((p) => !p.deleted).length : 0) < 5
+                              ? 'страницы'
+                              : 'страниц'
+                          }
                         </div>
                       </div>
 
@@ -604,7 +634,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   </div>
 
                   <div className="text-[10px] text-neutral-400 mt-6">
-                    Страница 1 из {recentNotebook.pages.length}
+                    Страница 1 из {recentNotebook.pages ? recentNotebook.pages.filter((p) => !p.deleted).length : 0}
                   </div>
                 </div>
 
@@ -614,7 +644,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     {recentNotebook.title}
                   </h4>
                   <p className="text-xs text-neutral-400 mt-0.5">
-                    {formatCardDate(recentNotebook.updatedAt)} · страниц 1 из {recentNotebook.pages.length}
+                    {formatCardDate(recentNotebook.updatedAt)} · страниц 1 из {recentNotebook.pages ? recentNotebook.pages.filter((p) => !p.deleted).length : 0}
                   </p>
                 </div>
 

@@ -1,6 +1,7 @@
 import { Notebook, NotoFileFormat, Page } from '../types';
 import { renderPage } from '../drawing-engine/renderer';
 import { jsPDF } from 'jspdf';
+import { normalizeNotebook } from '../storage/migration';
 
 /**
  * Triggers a browser/system file download for a blob or data
@@ -18,15 +19,16 @@ export function downloadFile(content: string | Blob, filename: string, mimeType:
 }
 
 /**
- * Exports a notebook into native .noto format
+ * Exports a notebook into native .noto format (v1.1.0)
  */
 export function exportToNotoFile(notebook: Notebook): void {
+  const normalized = normalizeNotebook(notebook);
   const fileData: NotoFileFormat = {
-    version: '1.0.0',
+    version: '1.1.0',
     application: 'Noto',
     exportedAt: Date.now(),
     notebook: {
-      ...notebook,
+      ...normalized,
       updatedAt: Date.now(),
     },
   };
@@ -37,7 +39,8 @@ export function exportToNotoFile(notebook: Notebook): void {
 }
 
 /**
- * Reads and parses a .noto file from user file upload
+ * Reads and parses a .noto file from user file upload.
+ * Backward compatible with v1.0.0, v1.1.0, and unwrapped notebook JSON.
  */
 export async function importNotoFile(file: File): Promise<Notebook> {
   const text = await file.text();
@@ -53,15 +56,18 @@ export async function importNotoFile(file: File): Promise<Notebook> {
     throw new Error('Некорректный формат файла .noto');
   }
 
-  // Handle direct notebook JSON or wrapped NotoFileFormat
-  let notebook: Notebook;
+  // Handle direct notebook JSON or wrapped NotoFileFormat (v1.0.0 or v1.1.0)
+  let rawNotebook: Notebook;
   if ('application' in obj && obj.application === 'Noto' && 'notebook' in obj) {
-    notebook = obj.notebook as Notebook;
+    rawNotebook = obj.notebook as Notebook;
   } else if ('pages' in obj && 'title' in obj) {
-    notebook = obj as unknown as Notebook;
+    rawNotebook = obj as unknown as Notebook;
   } else {
     throw new Error('Файл не содержит данных тетради Noto.');
   }
+
+  // Normalize legacy data (fill missing fields like deleted: false and updatedAt)
+  const notebook = normalizeNotebook(rawNotebook);
 
   // Assign fresh ID if importing to prevent collision
   notebook.id = `nb_imported_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -109,9 +115,10 @@ export async function exportNotebookToPdf(
   notebook: Notebook,
   pageIndices?: number[]
 ): Promise<void> {
+  const activePages = notebook.pages.filter((p) => !p.deleted);
   const pagesToExport = pageIndices && pageIndices.length > 0
-    ? pageIndices.map((i) => notebook.pages[i]).filter(Boolean)
-    : notebook.pages;
+    ? pageIndices.map((i) => activePages[i]).filter(Boolean)
+    : activePages;
 
   if (pagesToExport.length === 0) return;
 

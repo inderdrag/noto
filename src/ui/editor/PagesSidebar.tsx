@@ -24,6 +24,7 @@ export const PagesSidebar: React.FC<PagesSidebarProps> = ({
   onDeletePage,
 }) => {
   const isDark = theme === 'dark';
+  const activePages = notebook.pages.filter((p) => !p.deleted);
 
   if (!isOpen) {
     return (
@@ -48,7 +49,7 @@ export const PagesSidebar: React.FC<PagesSidebarProps> = ({
       <div>
         <div className="flex items-center justify-between pb-2 mb-2">
           <span className="text-[11px] font-bold tracking-wider text-neutral-400 uppercase">
-            Страницы ({notebook.pages.length})
+            Страницы ({activePages.length})
           </span>
           <button
             onClick={onToggleOpen}
@@ -61,7 +62,7 @@ export const PagesSidebar: React.FC<PagesSidebarProps> = ({
 
         {/* Scrollable list of pages */}
         <div className="space-y-3 overflow-y-auto max-h-[calc(100vh-230px)] pr-1">
-          {notebook.pages.map((p, idx) => {
+          {activePages.map((p, idx) => {
             const isCur = p.id === currentPageId;
             return (
               <div
@@ -94,7 +95,7 @@ export const PagesSidebar: React.FC<PagesSidebarProps> = ({
 
                 <div className="flex items-center justify-between text-[11px] font-medium text-neutral-600 dark:text-neutral-300 mt-1.5 px-0.5">
                   <span className="truncate">Страница {idx + 1}</span>
-                  {notebook.pages.length > 1 && (
+                  {activePages.length > 1 && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

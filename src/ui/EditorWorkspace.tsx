@@ -139,11 +139,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   paperTypeTrigger,
 }) => {
   const isDark = theme === 'dark';
+  const activePages = notebook.pages.filter((p) => !p.deleted);
   const currentPageIndex = Math.max(
     0,
-    notebook.pages.findIndex((p) => p.id === notebook.currentPageId)
+    activePages.findIndex((p) => p.id === notebook.currentPageId)
   );
-  const currentPage = notebook.pages[currentPageIndex] || notebook.pages[0];
+  const currentPage = activePages[currentPageIndex] || activePages[0] || notebook.pages[0];
 
   // Tool states
   const [activeTool, setActiveTool] = useState<ToolType>('pen');
@@ -175,6 +176,13 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0 });
   const touchDistanceRef = useRef<number | null>(null);
+  const touchMidpointRef = useRef<{ x: number; y: number } | null>(null);
+  const touchInitialScaleRef = useRef<number>(1);
+  const touchInitialPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Palm rejection: track pen active state and timestamp of last pen interaction
+  const isPenActiveRef = useRef(false);
+  const lastPenTimeRef = useRef(0);
 
   // History Stack
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -253,7 +261,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-    const selStrokes = (page.strokes || []).filter((s) => sIds.includes(s.id));
+    const selStrokes = (page.strokes || []).filter((s) => !s.deleted && sIds.includes(s.id));
     selStrokes.forEach((s) => {
       s.points.forEach((p) => {
         minX = Math.min(minX, p.x);
@@ -263,7 +271,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       });
     });
 
-    const selShapes = (page.shapes || []).filter((sh) => shIds.includes(sh.id));
+    const selShapes = (page.shapes || []).filter((sh) => !sh.deleted && shIds.includes(sh.id));
     selShapes.forEach((sh) => {
       const x2 = sh.x + sh.width;
       const y2 = sh.y + sh.height;
@@ -273,7 +281,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       maxY = Math.max(maxY, Math.max(sh.y, y2));
     });
 
-    const selTexts = (page.texts || []).filter((t) => tIds.includes(t.id));
+    const selTexts = (page.texts || []).filter((t) => !t.deleted && tIds.includes(t.id));
     selTexts.forEach((t) => {
       const w = t.width || Math.max(80, t.text.length * (t.fontSize * 0.6));
       const h = t.height || t.fontSize * 1.5;
@@ -431,13 +439,16 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    // Limit DPR to at most 2 to avoid memory bloat and performance drops on high-density mobile screens
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
     const displayWidth = canvas.clientWidth;
     const displayHeight = canvas.clientHeight;
 
-    if (canvas.width !== displayWidth * dpr || canvas.height !== displayHeight * dpr) {
-      canvas.width = displayWidth * dpr;
-      canvas.height = displayHeight * dpr;
+    const targetW = Math.round(displayWidth * dpr);
+    const targetH = Math.round(displayHeight * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
     }
 
     ctx.save();
@@ -479,12 +490,20 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     ctx.roundRect(0, 0, currentPage.width, currentPage.height, cornerRadius);
     ctx.clip();
 
-    // 4. Render page contents (strictly bounded within the sheet)
+    // 5. Calculate visible viewport bounds in page coordinates for culling
+    const cullingPad = 80;
+    const vpMinX = -pan.x / scale - cullingPad;
+    const vpMinY = -pan.y / scale - cullingPad;
+    const vpMaxX = (displayWidth - pan.x) / scale + cullingPad;
+    const vpMaxY = (displayHeight - pan.y) / scale + cullingPad;
+
+    // 6. Render page contents (strictly bounded within the sheet, with viewport culling)
     renderPage(ctx, currentPage, {
       activeStroke: activeStrokeRef.current,
       selection: selectionBox,
       eraserPreview: eraserPreviewRef.current,
       pressureEnabled: true,
+      viewportBounds: { minX: vpMinX, minY: vpMinY, maxX: vpMaxX, maxY: vpMaxY },
     });
 
     // Active Shape in progress (with live outline for ALL shapes: triangle, star, lines, arrows, rect, circle)
@@ -637,20 +656,22 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Clear entire canvas (with Undo support)
   const handleClearCanvas = () => {
-    if (
-      (currentPage.strokes?.length || 0) === 0 &&
-      (currentPage.shapes?.length || 0) === 0 &&
-      (currentPage.texts?.length || 0) === 0 &&
-      (currentPage.images?.length || 0) === 0
-    ) {
+    const hasActiveContent =
+      (currentPage.strokes || []).some((s) => !s.deleted) ||
+      (currentPage.shapes || []).some((sh) => !sh.deleted) ||
+      (currentPage.texts || []).some((t) => !t.deleted) ||
+      (currentPage.images || []).some((img) => !img.deleted);
+
+    if (!hasActiveContent) {
       return;
     }
+    const now = Date.now();
     updateCurrentPage((page) => ({
       ...page,
-      strokes: [],
-      shapes: [],
-      texts: [],
-      images: [],
+      strokes: (page.strokes || []).map((s) => ({ ...s, deleted: true, updatedAt: now })),
+      shapes: (page.shapes || []).map((sh) => ({ ...sh, deleted: true, updatedAt: now })),
+      texts: (page.texts || []).map((t) => ({ ...t, deleted: true, updatedAt: now })),
+      images: (page.images || []).map((img) => ({ ...img, deleted: true, updatedAt: now })),
     }), 'Очистить лист');
     setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
     setSelectionBox(null);
@@ -709,11 +730,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   // Selection actions: Delete, Duplicate, Recolor
   const handleDeleteSelected = () => {
     if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0) return;
+    const now = Date.now();
     updateCurrentPage((page) => ({
       ...page,
-      strokes: (page.strokes || []).filter((s) => !selectedIds.strokeIds.includes(s.id)),
-      shapes: (page.shapes || []).filter((s) => !selectedIds.shapeIds.includes(s.id)),
-      texts: (page.texts || []).filter((t) => !selectedIds.textIds.includes(t.id)),
+      strokes: (page.strokes || []).map((s) => selectedIds.strokeIds.includes(s.id) ? { ...s, deleted: true, updatedAt: now } : s),
+      shapes: (page.shapes || []).map((sh) => selectedIds.shapeIds.includes(sh.id) ? { ...sh, deleted: true, updatedAt: now } : sh),
+      texts: (page.texts || []).map((t) => selectedIds.textIds.includes(t.id) ? { ...t, deleted: true, updatedAt: now } : t),
     }), 'Удалить выделенное');
     setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
     setSelectionBox(null);
@@ -722,28 +744,38 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   const handleDuplicateSelected = () => {
     if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0) return;
     const offset = 30;
+    const now = Date.now();
     const newStrokes = (currentPage.strokes || [])
-      .filter((s) => selectedIds.strokeIds.includes(s.id))
+      .filter((s) => !s.deleted && selectedIds.strokeIds.includes(s.id))
       .map((s) => ({
         ...s,
-        id: `stroke_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        id: `stroke_${now}_${Math.random().toString(36).substr(2, 5)}`,
         points: s.points.map((p) => ({ ...p, x: p.x + offset, y: p.y + offset })),
+        createdAt: now,
+        updatedAt: now,
+        deleted: false,
       }));
     const newShapes = (currentPage.shapes || [])
-      .filter((s) => selectedIds.shapeIds.includes(s.id))
+      .filter((s) => !s.deleted && selectedIds.shapeIds.includes(s.id))
       .map((s) => ({
         ...s,
-        id: `shape_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        id: `shape_${now}_${Math.random().toString(36).substr(2, 5)}`,
         x: s.x + offset,
         y: s.y + offset,
+        createdAt: now,
+        updatedAt: now,
+        deleted: false,
       }));
     const newTexts = (currentPage.texts || [])
-      .filter((t) => selectedIds.textIds.includes(t.id))
+      .filter((t) => !t.deleted && selectedIds.textIds.includes(t.id))
       .map((t) => ({
         ...t,
-        id: `txt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        id: `txt_${now}_${Math.random().toString(36).substr(2, 5)}`,
         x: t.x + offset,
         y: t.y + offset,
+        createdAt: now,
+        updatedAt: now,
+        deleted: false,
       }));
 
     updateCurrentPage((page) => ({
@@ -772,23 +804,24 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     // Fallback if selectionBox exists but selectedIds was empty
     if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0 && selectionBox) {
       sIds = (currentPage.strokes || [])
-        .filter((s) => s.points.some((p) => pointInRect(p, selectionBox)))
+        .filter((s) => !s.deleted && s.points.some((p) => pointInRect(p, selectionBox)))
         .map((s) => s.id);
       shIds = (currentPage.shapes || [])
-        .filter((sh) => pointInRect({ x: sh.x, y: sh.y }, selectionBox))
+        .filter((sh) => !sh.deleted && pointInRect({ x: sh.x, y: sh.y }, selectionBox))
         .map((sh) => sh.id);
       tIds = (currentPage.texts || [])
-        .filter((t) => pointInRect({ x: t.x, y: t.y }, selectionBox))
+        .filter((t) => !t.deleted && pointInRect({ x: t.x, y: t.y }, selectionBox))
         .map((t) => t.id);
     }
 
     if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0) return;
 
+    const now = Date.now();
     updateCurrentPage((page) => ({
       ...page,
-      strokes: (page.strokes || []).map((s) => sIds.includes(s.id) ? { ...s, color: c } : s),
-      shapes: (page.shapes || []).map((sh) => shIds.includes(sh.id) ? { ...sh, strokeColor: c } : sh),
-      texts: (page.texts || []).map((t) => tIds.includes(t.id) ? { ...t, color: c } : t),
+      strokes: (page.strokes || []).map((s) => sIds.includes(s.id) ? { ...s, color: c, updatedAt: now } : s),
+      shapes: (page.shapes || []).map((sh) => shIds.includes(sh.id) ? { ...sh, strokeColor: c, updatedAt: now } : sh),
+      texts: (page.texts || []).map((t) => tIds.includes(t.id) ? { ...t, color: c, updatedAt: now } : t),
     }), 'Перекрасить выделенное');
 
     setSelectedIds({
@@ -804,6 +837,21 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     // Automatically close any open popover as requested!
     closeAllPopovers();
 
+    // 1. Palm Rejection (защита от ладони):
+    if (e.pointerType === 'pen') {
+      isPenActiveRef.current = true;
+      lastPenTimeRef.current = Date.now();
+    } else if (e.pointerType === 'touch') {
+      // If pen is currently active or was used recently, ignore touch (palm rejection)
+      if (isPenActiveRef.current || (Date.now() - lastPenTimeRef.current < 800)) {
+        return;
+      }
+      // If two fingers are pinching/panning, do not draw
+      if (touchDistanceRef.current !== null) {
+        return;
+      }
+    }
+
     if (isSpacePressed || activeTool === 'pan' || e.button === 1) {
       setIsPanning(true);
       panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
@@ -813,7 +861,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     if (e.button !== 0) return;
 
     isPointerDownRef.current = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
 
     const pt = screenToPageCoord(e.clientX, e.clientY);
     const pressure = e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
@@ -830,13 +882,13 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       if (handle) {
         // Create deep snapshot of selected items for smooth relative scaling / moving
         const initialStrokes = (currentPage.strokes || [])
-          .filter((s) => selectedIds.strokeIds.includes(s.id))
+          .filter((s) => !s.deleted && selectedIds.strokeIds.includes(s.id))
           .map((s) => ({ ...s, points: s.points.map((p) => ({ ...p })) }));
         const initialShapes = (currentPage.shapes || [])
-          .filter((sh) => selectedIds.shapeIds.includes(sh.id))
+          .filter((sh) => !sh.deleted && selectedIds.shapeIds.includes(sh.id))
           .map((sh) => ({ ...sh }));
         const initialTexts = (currentPage.texts || [])
-          .filter((t) => selectedIds.textIds.includes(t.id))
+          .filter((t) => !t.deleted && selectedIds.textIds.includes(t.id))
           .map((t) => ({ ...t }));
 
         selectionTransformRef.current = {
@@ -861,6 +913,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         opacity: activeTool === 'marker' ? 0.35 : strokeOpacity,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        deleted: false,
       };
     } else if (activeTool === 'eraser') {
       eraserPreviewRef.current = { x: pt.x, y: pt.y, radius: eraserRadius };
@@ -880,6 +933,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         dashed: activeTool === 'dashed-line' || activeTool === 'dashed-arrow',
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        deleted: false,
       };
     } else if (activeTool === 'text') {
       setEditingText({
@@ -908,6 +962,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Pointer Move with auto-snap to grid for horizontal/vertical lines and smooth interpolation
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // 1. Palm Rejection & Multi-touch Guard
+    if (e.pointerType === 'pen') {
+      lastPenTimeRef.current = Date.now();
+    } else if (e.pointerType === 'touch') {
+      if (isPenActiveRef.current || (Date.now() - lastPenTimeRef.current < 800) || touchDistanceRef.current !== null) {
+        return;
+      }
+    }
+
     if (isPanning) {
       setPan({
         x: e.clientX - panStartRef.current.x,
@@ -1159,6 +1222,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Pointer Up
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'pen') {
+      isPenActiveRef.current = false;
+      lastPenTimeRef.current = Date.now();
+    } else if (e.pointerType === 'touch') {
+      if (isPenActiveRef.current || (Date.now() - lastPenTimeRef.current < 800) || touchDistanceRef.current !== null) {
+        return;
+      }
+    }
+
     isPointerDownRef.current = false;
     startPointRef.current = null;
 
@@ -1219,13 +1291,13 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       } else {
         const selRect = selectionBox;
         const matchedStrokes = (currentPage.strokes || [])
-          .filter((s) => s.points.some((p) => pointInRect(p, selRect)))
+          .filter((s) => !s.deleted && s.points.some((p) => pointInRect(p, selRect)))
           .map((s) => s.id);
         const matchedShapes = (currentPage.shapes || [])
-          .filter((s) => pointInRect({ x: s.x, y: s.y }, selRect))
+          .filter((s) => !s.deleted && pointInRect({ x: s.x, y: s.y }, selRect))
           .map((s) => s.id);
         const matchedTexts = (currentPage.texts || [])
-          .filter((t) => pointInRect({ x: t.x, y: t.y }, selRect))
+          .filter((t) => !t.deleted && pointInRect({ x: t.x, y: t.y }, selRect))
           .map((t) => t.id);
 
         if (matchedStrokes.length === 0 && matchedShapes.length === 0 && matchedTexts.length === 0) {
@@ -1249,28 +1321,68 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Eraser engine
   const handleEraserAction = (center: Point) => {
+    const now = Date.now();
     if (eraserMode === 'object') {
       let hasErased = false;
-      const filteredStrokes = (currentPage.strokes || []).filter((s) => {
-        const intersects = strokeIntersectsCircle(s, center, eraserRadius);
-        if (intersects) hasErased = true;
-        return !intersects;
+      const updatedStrokes = (currentPage.strokes || []).map((s) => {
+        if (!s.deleted && strokeIntersectsCircle(s, center, eraserRadius)) {
+          hasErased = true;
+          return { ...s, deleted: true, updatedAt: now };
+        }
+        return s;
       });
 
-      const filteredShapes = (currentPage.shapes || []).filter((sh) => {
-        const cx = sh.x + sh.width / 2;
-        const cy = sh.y + sh.height / 2;
-        const dist = Math.hypot(cx - center.x, cy - center.y);
-        const intersects = dist < eraserRadius + Math.max(Math.abs(sh.width), Math.abs(sh.height)) / 2;
-        if (intersects) hasErased = true;
-        return !intersects;
+      const updatedShapes = (currentPage.shapes || []).map((sh) => {
+        if (!sh.deleted) {
+          const cx = sh.x + sh.width / 2;
+          const cy = sh.y + sh.height / 2;
+          const dist = Math.hypot(cx - center.x, cy - center.y);
+          const intersects = dist < eraserRadius + Math.max(Math.abs(sh.width), Math.abs(sh.height)) / 2;
+          if (intersects) {
+            hasErased = true;
+            return { ...sh, deleted: true, updatedAt: now };
+          }
+        }
+        return sh;
+      });
+
+      const updatedTexts = (currentPage.texts || []).map((t) => {
+        if (!t.deleted) {
+          const w = t.width || 120;
+          const h = t.height || 40;
+          const cx = t.x + w / 2;
+          const cy = t.y + h / 2;
+          const dist = Math.hypot(cx - center.x, cy - center.y);
+          const intersects = dist < eraserRadius + Math.max(w, h) / 2;
+          if (intersects) {
+            hasErased = true;
+            return { ...t, deleted: true, updatedAt: now };
+          }
+        }
+        return t;
+      });
+
+      const updatedImages = (currentPage.images || []).map((img) => {
+        if (!img.deleted) {
+          const cx = img.x + img.width / 2;
+          const cy = img.y + img.height / 2;
+          const dist = Math.hypot(cx - center.x, cy - center.y);
+          const intersects = dist < eraserRadius + Math.max(img.width, img.height) / 2;
+          if (intersects) {
+            hasErased = true;
+            return { ...img, deleted: true, updatedAt: now };
+          }
+        }
+        return img;
       });
 
       if (hasErased) {
         updateCurrentPage((page) => ({
           ...page,
-          strokes: filteredStrokes,
-          shapes: filteredShapes,
+          strokes: updatedStrokes,
+          shapes: updatedShapes,
+          texts: updatedTexts,
+          images: updatedImages,
         }));
       }
     } else {
@@ -1278,10 +1390,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       const newStrokes: Stroke[] = [];
 
       for (const stroke of currentPage.strokes || []) {
-        if (strokeIntersectsCircle(stroke, center, eraserRadius)) {
+        if (!stroke.deleted && strokeIntersectsCircle(stroke, center, eraserRadius)) {
           hasErased = true;
+          newStrokes.push({ ...stroke, deleted: true, updatedAt: now });
           const pieces = sliceStrokeByEraser(stroke, center, eraserRadius);
-          newStrokes.push(...pieces);
+          newStrokes.push(...pieces.map((p) => ({ ...p, deleted: false, updatedAt: now })));
         } else {
           newStrokes.push(stroke);
         }
@@ -1316,39 +1429,71 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
   };
 
-  // Touch Pinch-to-Zoom for mobile & tablet
+  // Touch Pinch-to-Zoom & Pan for mobile & tablet (Два пальца: масштабирование и перемещение)
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     closeAllPopovers();
-    if (e.touches.length === 2) {
+
+    // Palm rejection
+    if (isPenActiveRef.current || (Date.now() - lastPenTimeRef.current < 800)) {
+      return;
+    }
+
+    if (e.touches.length >= 2) {
+      // Two fingers on the sheet: cancel any tentative single-finger drawing in progress
+      activeStrokeRef.current = null;
+      activeShapeRef.current = null;
+      isPointerDownRef.current = false;
+
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      touchDistanceRef.current = dist;
+      touchDistanceRef.current = Math.max(10, dist);
+      touchMidpointRef.current = { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+      touchInitialScaleRef.current = scale;
+      touchInitialPanRef.current = { ...pan };
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    if (e.touches.length === 2 && touchDistanceRef.current !== null) {
+    // Palm rejection
+    if (isPenActiveRef.current || (Date.now() - lastPenTimeRef.current < 800)) {
+      return;
+    }
+
+    if (e.touches.length >= 2 && touchDistanceRef.current !== null && touchMidpointRef.current !== null) {
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const factor = dist / touchDistanceRef.current;
-      touchDistanceRef.current = dist;
+      const currentMidX = (t1.clientX + t2.clientX) / 2;
+      const currentMidY = (t1.clientY + t2.clientY) / 2;
 
-      const midX = (t1.clientX + t2.clientX) / 2;
-      const midY = (t1.clientY + t2.clientY) / 2;
-      handleZoomDelta(factor, midX, mouseYToCanvas(midY));
+      const factor = dist / touchDistanceRef.current;
+      const newScale = Math.min(3.5, Math.max(0.2, touchInitialScaleRef.current * factor));
+
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const startMidCanvasX = touchMidpointRef.current.x - rect.left;
+      const startMidCanvasY = touchMidpointRef.current.y - rect.top;
+      const curMidCanvasX = currentMidX - rect.left;
+      const curMidCanvasY = currentMidY - rect.top;
+
+      const pageX = (startMidCanvasX - touchInitialPanRef.current.x) / touchInitialScaleRef.current;
+      const pageY = (startMidCanvasY - touchInitialPanRef.current.y) / touchInitialScaleRef.current;
+
+      const newPanX = curMidCanvasX - pageX * newScale;
+      const newPanY = curMidCanvasY - pageY * newScale;
+
+      setScale(newScale);
+      setPan({ x: newPanX, y: newPanY });
     }
   };
 
-  const mouseYToCanvas = (clientY: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return 0;
-    return clientY - canvas.getBoundingClientRect().top;
-  };
-
-  const handleTouchEnd = () => {
-    touchDistanceRef.current = null;
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length < 2) {
+      touchDistanceRef.current = null;
+      touchMidpointRef.current = null;
+    }
   };
 
   // Shortcuts
@@ -1420,6 +1565,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           height,
           createdAt: Date.now(),
           updatedAt: Date.now(),
+          deleted: false,
         };
 
         updateCurrentPage((page) => ({
@@ -1433,24 +1579,25 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   };
 
   const handleNextPage = () => {
-    if (currentPageIndex < notebook.pages.length - 1) {
-      onUpdateNotebook({ ...notebook, currentPageId: notebook.pages[currentPageIndex + 1].id });
+    if (currentPageIndex < activePages.length - 1) {
+      onUpdateNotebook({ ...notebook, currentPageId: activePages[currentPageIndex + 1].id });
     }
   };
 
   const handlePrevPage = () => {
     if (currentPageIndex > 0) {
-      onUpdateNotebook({ ...notebook, currentPageId: notebook.pages[currentPageIndex - 1].id });
+      onUpdateNotebook({ ...notebook, currentPageId: activePages[currentPageIndex - 1].id });
     }
   };
 
   const handleAddPage = () => {
     const isLand = currentPage.width > currentPage.height;
     const dim = getStandardPageDimensions(currentPage.background.type, isLand);
+    const now = Date.now();
     const newPage: Page = {
-      id: `page_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      title: `Страница ${notebook.pages.length + 1}`,
-      order: notebook.pages.length,
+      id: `page_${now}_${Math.random().toString(36).substr(2, 5)}`,
+      title: `Страница ${activePages.length + 1}`,
+      order: activePages.length,
       width: dim.width,
       height: dim.height,
       background: { ...currentPage.background },
@@ -1458,15 +1605,16 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       shapes: [],
       texts: [],
       images: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
+      deleted: false,
     };
 
     onUpdateNotebook({
       ...notebook,
       pages: [...notebook.pages, newPage],
       currentPageId: newPage.id,
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
   };
 
@@ -1488,7 +1636,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         notebook={notebook}
         currentPage={currentPage}
         currentPageIndex={currentPageIndex}
-        totalPages={notebook.pages.length}
+        totalPages={activePages.length}
         currentRulingName={currentRulingName}
         isSheetFullscreen={isSheetFullscreen}
         theme={theme}
@@ -1538,11 +1686,16 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           onSelectPage={(pageId) => onUpdateNotebook({ ...notebook, currentPageId: pageId })}
           onAddPage={handleAddPage}
           onDeletePage={(pageId) => {
-            const remaining = notebook.pages.filter((pg) => pg.id !== pageId);
+            const now = Date.now();
+            const updatedPages = notebook.pages.map((pg) =>
+              pg.id === pageId ? { ...pg, deleted: true, updatedAt: now } : pg
+            );
+            const remaining = updatedPages.filter((pg) => !pg.deleted);
             onUpdateNotebook({
               ...notebook,
-              pages: remaining,
-              currentPageId: remaining[0].id,
+              pages: updatedPages,
+              currentPageId: remaining[0]?.id || pageId,
+              updatedAt: now,
             });
           }}
         />
@@ -1592,10 +1745,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
             onWheel={handleWheel}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             className={`w-full h-full touch-none block absolute inset-0 ${
               isPanning
                 ? 'cursor-grabbing'
@@ -1766,12 +1921,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           {/* Inline Text Editor */}
           {editingText && (
             <div
-              className={`absolute z-40 p-2.5 rounded-2xl shadow-2xl border-2 border-[#6355C7] ${
+              className={`absolute z-40 p-2.5 rounded-2xl shadow-2xl border-2 border-[#6355C7] max-w-[calc(100vw-32px)] ${
                 isDark ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-900'
               }`}
               style={{
-                left: pan.x + editingText.x * scale,
-                top: pan.y + editingText.y * scale,
+                left: Math.max(16, Math.min(window.innerWidth - 270, pan.x + editingText.x * scale)),
+                top: Math.max(64, Math.min(window.innerHeight - 170, pan.y + editingText.y * scale)),
               }}
             >
               <textarea
@@ -1808,6 +1963,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                         italic: editingText.italic,
                         createdAt: Date.now(),
                         updatedAt: Date.now(),
+                        deleted: false,
                       };
                       updateCurrentPage((page) => ({
                         ...page,
@@ -1896,11 +2052,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
               <span className="font-mono text-xs px-1 text-neutral-500 dark:text-neutral-400">
-                {currentPageIndex + 1} / {notebook.pages.length}
+                {currentPageIndex + 1} / {activePages.length}
               </span>
               <button
                 onClick={handleNextPage}
-                disabled={currentPageIndex >= notebook.pages.length - 1}
+                disabled={currentPageIndex >= activePages.length - 1}
                 className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
                 title="Следующая страница"
               >

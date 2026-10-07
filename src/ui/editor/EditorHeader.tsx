@@ -61,32 +61,33 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
   return (
     <div className="shrink-0 flex flex-col z-20 select-none">
       {/* Main Header Navbar */}
-      <header className={`h-14 px-8 flex items-center justify-between border-b ${
+      <header className={`min-h-[48px] px-3 sm:px-8 pl-safe pr-safe flex items-center justify-between border-b gap-2 ${
         isDark ? 'bg-[#12131F] border-neutral-800' : 'bg-white border-[#EAEBF2]'
       }`}>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
           <button
             onClick={onBackToLibrary}
-            className={`px-3.5 py-1.5 text-xs font-medium rounded-full border transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-medium rounded-full border transition-all cursor-pointer flex items-center gap-1.5 ${
               isDark 
                 ? 'border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700' 
                 : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 shadow-2xs'
             }`}
+            title="В библиотеку"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>В библиотеку</span>
+            <span className="hidden sm:inline">В библиотеку</span>
           </button>
-          <div className={`w-px h-4 ${isDark ? 'bg-neutral-800' : 'bg-neutral-200'}`} />
-          <div className="flex items-center gap-2 cursor-pointer" onClick={onBackToLibrary}>
-            <NotoIcon size={24} color="#6355C7" />
-            <span className="font-bold tracking-tight text-lg text-neutral-900 dark:text-white">
+          <div className={`w-px h-4 hidden sm:block ${isDark ? 'bg-neutral-800' : 'bg-neutral-200'}`} />
+          <div className="flex items-center gap-1.5 sm:gap-2 cursor-pointer" onClick={onBackToLibrary}>
+            <NotoIcon size={20} color="#6355C7" />
+            <span className="font-bold tracking-tight text-base sm:text-lg text-neutral-900 dark:text-white hidden xs:inline">
               Noto
             </span>
           </div>
         </div>
 
         {/* Center: Notebook Title & Saved badge */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           {isEditingTitle ? (
             <input
               type="text"
@@ -95,26 +96,26 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
               onBlur={onSubmitTitle}
               onKeyDown={(e) => e.key === 'Enter' && onSubmitTitle()}
               onChange={(e) => onChangeTitleInput(e.target.value)}
-              className="text-base font-semibold border-b border-[#6355C7] bg-transparent outline-none text-center"
+              className="text-sm sm:text-base font-semibold border-b border-[#6355C7] bg-transparent outline-none text-center max-w-[140px] sm:max-w-xs"
             />
           ) : (
             <button
               onClick={onStartEditingTitle}
-              className="text-base font-semibold hover:underline text-neutral-900 dark:text-white cursor-pointer"
+              className="text-sm sm:text-base font-semibold hover:underline text-neutral-900 dark:text-white cursor-pointer truncate max-w-[130px] sm:max-w-xs"
               title="Нажмите, чтобы переименовать"
             >
               {notebook.title}
             </button>
           )}
-          <span className="text-xs text-neutral-400">· Стр. {currentPageIndex + 1} из {totalPages}</span>
-          <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
+          <span className="text-[11px] sm:text-xs text-neutral-400 shrink-0">· {currentPageIndex + 1}/{totalPages}</span>
+          <span className="hidden md:inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
             <Check className="w-3 h-3" />
             Сохранено
           </span>
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           {onClearPage && (
             <button
               onClick={onClearPage}
@@ -131,7 +132,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
 
           <button
             onClick={onOpenExportModal}
-            className={`px-4 py-1.5 text-xs font-medium rounded-full border transition-all cursor-pointer ${
+            className={`px-3 sm:px-4 py-1.5 text-xs font-medium rounded-full border transition-all cursor-pointer ${
               isDark 
                 ? 'border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700' 
                 : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 shadow-2xs'
@@ -143,7 +144,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
       </header>
 
       {/* 3. Subheader Toolbar Strip */}
-      <div className={`h-11 px-8 flex items-center justify-between border-b text-xs ${
+      <div className={`min-h-[38px] px-3 sm:px-8 pl-safe pr-safe flex items-center justify-between border-b text-xs overflow-x-auto ${
         isDark ? 'bg-[#151624] border-neutral-800' : 'bg-white border-[#EAEBF2]'
       }`}>
         <div className="flex items-center gap-3">

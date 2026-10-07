@@ -1,3 +1,15 @@
+import { getSupabase } from './supabaseClient';
+import { authManager } from '../auth/authManager';
+import { Notebook, Folder, Page } from '../types';
+import { mergePages } from './pageMerger';
+import { uploadImageToStorage } from './imageStorage';
+import { 
+  dbGetAllNotebooks, 
+  dbSaveNotebook, 
+  dbGetFolders, 
+  dbSaveFolders 
+} from '../storage/db';
+
 export interface SyncStatus {
   isOnline: boolean;
   isSyncing: boolean;
@@ -6,18 +18,29 @@ export interface SyncStatus {
   syncError: string | null;
 }
 
+interface QueuedAction {
+  type: 'upsert_notebook' | 'delete_notebook' | 'upsert_folder';
+  id: string;
+  data?: any;
+  timestamp: number;
+}
+
 export class SyncManager {
   private deviceId: string;
   private status: SyncStatus;
   private listeners: ((status: SyncStatus) => void)[] = [];
+  private debounceTimer: NodeJS.Timeout | null = null;
+  private queue: QueuedAction[] = [];
+  private onRemoteUpdateCallback: (() => void) | null = null;
 
   constructor() {
     this.deviceId = this.getOrCreateDeviceId();
+    this.queue = this.loadQueue();
     this.status = {
       isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
       isSyncing: false,
-      lastSyncedAt: null,
-      pendingChangesCount: 0,
+      lastSyncedAt: this.loadLastSynced(),
+      pendingChangesCount: this.queue.length,
       syncError: null,
     };
 
@@ -37,9 +60,47 @@ export class SyncManager {
     return id;
   }
 
+  private loadQueue(): QueuedAction[] {
+    if (typeof localStorage === 'undefined') return [];
+    try {
+      const saved = localStorage.getItem('noto_sync_offline_queue');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private saveQueue() {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem('noto_sync_offline_queue', JSON.stringify(this.queue));
+      this.status.pendingChangesCount = this.queue.length;
+      this.notify();
+    } catch {
+      // ignore
+    }
+  }
+
+  private loadLastSynced(): number | null {
+    if (typeof localStorage === 'undefined') return null;
+    const s = localStorage.getItem('noto_last_synced_at');
+    return s ? parseInt(s, 10) : null;
+  }
+
+  private setLastSynced(time: number) {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('noto_last_synced_at', time.toString());
+    }
+    this.status.lastSyncedAt = time;
+  }
+
   private handleConnectivity(online: boolean) {
     this.status.isOnline = online;
     this.notify();
+    if (online) {
+      // Network appeared: sync queued and pending changes
+      this.syncNow();
+    }
   }
 
   public getStatus(): SyncStatus {
@@ -58,6 +119,10 @@ export class SyncManager {
     };
   }
 
+  public setOnRemoteUpdate(cb: () => void) {
+    this.onRemoteUpdateCallback = cb;
+  }
+
   private notify() {
     for (const listener of this.listeners) {
       listener({ ...this.status });
@@ -65,11 +130,57 @@ export class SyncManager {
   }
 
   /**
-   * Syncs pending local changes with cloud backend (pluggable with Firebase / Supabase)
+   * Schedules a debounced sync (600ms) after local save
    */
-  public async syncNow(): Promise<boolean> {
+  public scheduleSync(notebook?: Notebook) {
+    if (notebook) {
+      // Enqueue action in case app closes or goes offline
+      this.enqueue({
+        type: 'upsert_notebook',
+        id: notebook.id,
+        data: notebook,
+        timestamp: Date.now(),
+      });
+    }
+
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+
+    this.debounceTimer = setTimeout(() => {
+      this.syncNow(notebook);
+    }, 600);
+  }
+
+  private enqueue(action: QueuedAction) {
+    // Replace duplicate queue entries for the same entity
+    this.queue = this.queue.filter((a) => !(a.type === action.type && a.id === action.id));
+    this.queue.push(action);
+    this.saveQueue();
+  }
+
+  /**
+   * Main sync engine:
+   * 1. Pushes local notebook changes (with images uploaded to Supabase Storage)
+   * 2. Merges page elements using CRDT Last-Write-Wins (mergePages)
+   * 3. Pulls remote updates and updates local storage
+   */
+  public async syncNow(targetNotebook?: Notebook): Promise<boolean> {
+    const supabase = getSupabase();
+    const user = authManager.getUser();
+
+    // If Supabase is not configured or user is not logged in, work offline without errors
+    if (!supabase || user.isGuest || !user.email) {
+      this.status.isSyncing = false;
+      this.status.syncError = null;
+      this.status.pendingChangesCount = 0;
+      this.notify();
+      return true;
+    }
+
     if (!this.status.isOnline) {
-      this.status.syncError = 'Нет подключения к сети';
+      this.status.syncError = 'Офлайн (изменения сохранены в очереди)';
+      this.status.pendingChangesCount = this.queue.length;
       this.notify();
       return false;
     }
@@ -79,16 +190,236 @@ export class SyncManager {
     this.notify();
 
     try {
-      // Simulate or perform sync handshake
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      this.status.lastSyncedAt = Date.now();
-      this.status.pendingChangesCount = 0;
+      const userId = user.id;
+
+      // 1. Process target notebook or queued items
+      const notebooksToPush: Notebook[] = [];
+      if (targetNotebook) {
+        notebooksToPush.push(targetNotebook);
+      } else {
+        const localNbs = await dbGetAllNotebooks();
+        notebooksToPush.push(...localNbs);
+      }
+
+      for (const nb of notebooksToPush) {
+        // Upsert Notebook Record
+        const { error: nbError } = await supabase.from('notebooks').upsert({
+          id: nb.id,
+          user_id: userId,
+          title: nb.title,
+          folder_id: nb.folderId || null,
+          cover_color: nb.coverColor,
+          cover_pattern: nb.coverPattern || 'plain',
+          current_page_id: nb.currentPageId,
+          favorite: Boolean(nb.favorite),
+          created_at: nb.createdAt,
+          updated_at: nb.updatedAt,
+          deleted: false,
+        });
+
+        if (nbError) {
+          console.warn('[SyncManager] Notebook upsert error:', nbError.message);
+        }
+
+        // Upsert each Page as a separate record
+        for (const page of nb.pages || []) {
+          // Process and upload base64 images to Supabase Storage bucket
+          if (page.images && page.images.length > 0) {
+            for (const img of page.images) {
+              if (img.src && img.src.startsWith('data:')) {
+                img.src = await uploadImageToStorage(img, userId, page.id);
+              }
+            }
+          }
+
+          // Fetch remote page if exists to perform element-level CRDT merge
+          const { data: remotePageRows } = await supabase
+            .from('pages')
+            .select('*')
+            .eq('id', page.id)
+            .limit(1);
+
+          let finalPage = page;
+          if (remotePageRows && remotePageRows.length > 0) {
+            const rawRemote = remotePageRows[0];
+            const remotePage: Page = {
+              id: rawRemote.id,
+              title: rawRemote.title,
+              order: rawRemote.order_num,
+              width: rawRemote.width,
+              height: rawRemote.height,
+              background: rawRemote.background,
+              strokes: rawRemote.strokes || [],
+              shapes: rawRemote.shapes || [],
+              texts: rawRemote.texts || [],
+              images: rawRemote.images || [],
+              createdAt: rawRemote.created_at,
+              updatedAt: rawRemote.updated_at,
+              deleted: rawRemote.deleted,
+            };
+            finalPage = mergePages(page, remotePage);
+          }
+
+          await supabase.from('pages').upsert({
+            id: finalPage.id,
+            user_id: userId,
+            notebook_id: nb.id,
+            title: finalPage.title,
+            order_num: finalPage.order,
+            width: finalPage.width,
+            height: finalPage.height,
+            background: finalPage.background,
+            strokes: finalPage.strokes,
+            shapes: finalPage.shapes,
+            texts: finalPage.texts,
+            images: finalPage.images,
+            created_at: finalPage.createdAt,
+            updated_at: finalPage.updatedAt,
+            deleted: Boolean(finalPage.deleted),
+          });
+        }
+      }
+
+      // 2. Push Folders
+      const localFolders = await dbGetFolders();
+      for (const f of localFolders) {
+        await supabase.from('folders').upsert({
+          id: f.id,
+          user_id: userId,
+          name: f.name,
+          icon: f.icon || null,
+          color: f.color || null,
+          created_at: f.createdAt,
+          updated_at: f.createdAt,
+        });
+      }
+
+      // 3. Pull Remote Notebooks & Pages that may have changed on other devices
+      const { data: remoteNotebooks } = await supabase
+        .from('notebooks')
+        .select('*')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+
+      if (remoteNotebooks && remoteNotebooks.length > 0) {
+        const { data: allRemotePages } = await supabase
+          .from('pages')
+          .select('*')
+          .eq('user_id', userId)
+          .order('order_num', { ascending: true });
+
+        const localNotebooks = await dbGetAllNotebooks();
+        const localNbMap = new Map(localNotebooks.map((n) => [n.id, n]));
+        let hasRemoteUpdates = false;
+
+        for (const remNb of remoteNotebooks) {
+          const pagesForNb = (allRemotePages || [])
+            .filter((p) => p.notebook_id === remNb.id)
+            .map((p) => ({
+              id: p.id,
+              title: p.title,
+              order: p.order_num,
+              width: p.width,
+              height: p.height,
+              background: p.background,
+              strokes: p.strokes || [],
+              shapes: p.shapes || [],
+              texts: p.texts || [],
+              images: p.images || [],
+              createdAt: p.created_at,
+              updatedAt: p.updated_at,
+              deleted: p.deleted,
+            }));
+
+          const localNb = localNbMap.get(remNb.id);
+          if (!localNb) {
+            // New remote notebook: add to local
+            const assembled: Notebook = {
+              id: remNb.id,
+              title: remNb.title,
+              folderId: remNb.folder_id,
+              coverColor: remNb.cover_color,
+              coverPattern: remNb.cover_pattern || 'plain',
+              pages: pagesForNb,
+              currentPageId: remNb.current_page_id || pagesForNb[0]?.id || `page_${Date.now()}`,
+              favorite: Boolean(remNb.favorite),
+              createdAt: remNb.created_at,
+              updatedAt: remNb.updated_at,
+            };
+            await dbSaveNotebook(assembled);
+            hasRemoteUpdates = true;
+          } else {
+            // Merge pages
+            if (remNb.updated_at > localNb.updatedAt) {
+              const mergedPages: Page[] = [];
+              const localPageMap = new Map((localNb.pages || []).map((p) => [p.id, p]));
+
+              for (const remPage of pagesForNb) {
+                const locPage = localPageMap.get(remPage.id);
+                if (locPage) {
+                  mergedPages.push(mergePages(locPage, remPage));
+                  localPageMap.delete(remPage.id);
+                } else {
+                  mergedPages.push(remPage);
+                }
+              }
+
+              // Append any local pages not on remote
+              for (const remainingLoc of localPageMap.values()) {
+                mergedPages.push(remainingLoc);
+              }
+
+              const updatedLocalNb: Notebook = {
+                ...localNb,
+                title: remNb.title,
+                folderId: remNb.folder_id,
+                coverColor: remNb.cover_color,
+                coverPattern: remNb.cover_pattern || localNb.coverPattern,
+                favorite: Boolean(remNb.favorite),
+                pages: mergedPages,
+                updatedAt: Math.max(localNb.updatedAt, remNb.updated_at),
+              };
+              await dbSaveNotebook(updatedLocalNb);
+              hasRemoteUpdates = true;
+            }
+          }
+        }
+
+        // 4. Pull Remote Folders
+        const { data: remoteFolders } = await supabase
+          .from('folders')
+          .select('*')
+          .eq('user_id', userId);
+
+        if (remoteFolders && remoteFolders.length > 0) {
+          const mergedFolders: Folder[] = remoteFolders.map((rf) => ({
+            id: rf.id,
+            name: rf.name,
+            icon: rf.icon,
+            color: rf.color,
+            createdAt: rf.created_at,
+          }));
+          await dbSaveFolders(mergedFolders);
+        }
+
+        if (hasRemoteUpdates && this.onRemoteUpdateCallback) {
+          this.onRemoteUpdateCallback();
+        }
+      }
+
+      // Clear offline queue on successful sync
+      this.queue = [];
+      this.saveQueue();
+      this.setLastSynced(Date.now());
       this.status.isSyncing = false;
+      this.status.syncError = null;
+      this.status.pendingChangesCount = 0;
       this.notify();
       return true;
-    } catch {
+    } catch (err: any) {
+      console.warn('[SyncManager] Sync failed:', err);
       this.status.isSyncing = false;
-      this.status.syncError = 'Ошибка синхронизации';
+      this.status.syncError = err?.message || 'Ошибка синхронизации';
       this.notify();
       return false;
     }

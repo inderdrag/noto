@@ -38,6 +38,7 @@ export interface Stroke {
   opacity: number;
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
 }
 
 export interface Shape {
@@ -55,6 +56,7 @@ export interface Shape {
   dashed?: boolean;
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
 }
 
 export interface TextObject {
@@ -73,6 +75,7 @@ export interface TextObject {
   align?: 'left' | 'center' | 'right';
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
 }
 
 export interface ImageObject {
@@ -85,6 +88,7 @@ export interface ImageObject {
   rotation?: number;
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
 }
 
 export type GridType = 'blank' | 'grid' | 'ruled' | 'dots';
@@ -111,6 +115,7 @@ export interface Page {
   images: ImageObject[];
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
 }
 
 export interface Folder {
