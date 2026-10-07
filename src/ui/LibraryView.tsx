@@ -542,68 +542,88 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     {/* Context Menu / Quick actions button */}
                     <div 
                       onClick={(e) => e.stopPropagation()} 
-                      className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-3 right-3 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-20"
                     >
                       <button
-                        onClick={() => setMenuOpenId(isMenuOpen ? null : nb.id)}
-                        className="p-1 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400 hover:text-neutral-700 dark:hover:text-white"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMenuOpenId(isMenuOpen ? null : nb.id);
+                        }}
+                        aria-label="Действия с тетрадью"
+                        className="p-1.5 sm:p-1 rounded-lg bg-black/5 dark:bg-white/10 sm:bg-transparent hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300 sm:text-neutral-400 hover:text-neutral-700 dark:hover:text-white cursor-pointer active:scale-95 transition-all"
                       >
                         <MoreVertical className="w-4 h-4" />
                       </button>
 
                       {isMenuOpen && (
-                        <div className={`absolute right-0 top-full mt-1 w-44 rounded-xl border p-1 z-30 shadow-xl ${
-                          isDark ? 'bg-[#1C1D2C] border-neutral-700 text-neutral-200' : 'bg-white border-neutral-200 text-neutral-800'
-                        }`}>
-                          <button
-                            onClick={() => {
-                              onToggleFavorite(nb.id);
+                        <>
+                          <div 
+                            className="fixed inset-0 z-20" 
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setMenuOpenId(null);
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2"
-                          >
-                            <Star className={`w-3.5 h-3.5 ${nb.favorite ? 'fill-amber-400 text-amber-400' : ''}`} />
-                            {nb.favorite ? 'Убрать из избранного' : 'В избранное'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setRenamingId(nb.id);
-                              setRenameInput(nb.title);
-                              setMenuOpenId(null);
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" /> Переименовать
-                          </button>
-                          <button
-                            onClick={() => {
-                              onDuplicateNotebook(nb.id);
-                              setMenuOpenId(null);
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2"
-                          >
-                            <Copy className="w-3.5 h-3.5" /> Дублировать
-                          </button>
-                          <button
-                            onClick={() => {
-                              exportToNotoFile(nb);
-                              setMenuOpenId(null);
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2"
-                          >
-                            <Download className="w-3.5 h-3.5" /> Экспорт .noto
-                          </button>
-                          <div className="border-t my-1 border-neutral-200 dark:border-neutral-700" />
-                          <button
-                            onClick={() => {
-                              onDeleteNotebook(nb.id);
-                              setMenuOpenId(null);
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-xs rounded-lg hover:bg-red-50 text-red-600 flex items-center gap-2"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" /> Удалить
-                          </button>
-                        </div>
+                            }} 
+                          />
+                          <div className={`absolute right-0 top-full mt-1 w-48 rounded-xl border p-1 z-30 shadow-xl ${
+                            isDark ? 'bg-[#1C1D2C] border-neutral-700 text-neutral-200' : 'bg-white border-neutral-200 text-neutral-800'
+                          }`}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleFavorite(nb.id);
+                                setMenuOpenId(null);
+                              }}
+                              className="w-full text-left px-3 py-2 sm:py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 cursor-pointer"
+                            >
+                              <Star className={`w-3.5 h-3.5 ${nb.favorite ? 'fill-amber-400 text-amber-400' : ''}`} />
+                              {nb.favorite ? 'Убрать из избранного' : 'В избранное'}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRenamingId(nb.id);
+                                setRenameInput(nb.title);
+                                setMenuOpenId(null);
+                              }}
+                              className="w-full text-left px-3 py-2 sm:py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" /> Переименовать
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDuplicateNotebook(nb.id);
+                                setMenuOpenId(null);
+                              }}
+                              className="w-full text-left px-3 py-2 sm:py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5" /> Дублировать
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                exportToNotoFile(nb);
+                                setMenuOpenId(null);
+                              }}
+                              className="w-full text-left px-3 py-2 sm:py-1.5 text-xs rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 cursor-pointer"
+                            >
+                              <Download className="w-3.5 h-3.5" /> Экспорт .noto
+                            </button>
+                            <div className="border-t my-1 border-neutral-200 dark:border-neutral-700" />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenuOpenId(null);
+                                if (window.confirm(`Удалить тетрадь «${nb.title}»?`)) {
+                                  onDeleteNotebook(nb.id);
+                                }
+                              }}
+                              className="w-full text-left px-3 py-2 sm:py-1.5 text-xs rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 text-red-600 flex items-center gap-2 cursor-pointer font-medium"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Удалить
+                            </button>
+                          </div>
+                        </>
                       )}
                     </div>
                   </div>
