@@ -12,7 +12,8 @@ import {
   Check,
   FolderPlus,
   ArrowUpDown,
-  Cloud
+  Cloud,
+  X
 } from 'lucide-react';
 import { Notebook, Folder } from '../types';
 import { exportToNotoFile } from '../export/exporter';
@@ -26,6 +27,7 @@ interface LibraryViewProps {
   onRenameNotebook: (id: string, newTitle: string) => void;
   onDuplicateNotebook: (id: string) => void;
   onDeleteNotebook: (id: string) => void;
+  onDeleteFolder?: (id: string) => void;
   onToggleFavorite: (id: string) => void;
   onCreateFolder: (name: string) => void;
   onImportNotoFile: (file: File) => void;
@@ -45,6 +47,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onRenameNotebook,
   onDuplicateNotebook,
   onDeleteNotebook,
+  onDeleteFolder,
   onToggleFavorite,
   onImportNotoFile,
   theme,
@@ -82,6 +85,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       setIsCreatingFolder(false);
     }
   };
+
+  const activeFolders = useMemo(() => {
+    return folders.filter((f) => !f.deleted);
+  }, [folders]);
 
   const totalPages = useMemo(() => {
     return notebooks.reduce((acc, nb) => acc + (nb.pages ? nb.pages.filter((p) => !p.deleted).length : 0), 0);
@@ -176,7 +183,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   const getFolderLabel = (folderId?: string | null) => {
-    const f = folders.find((item) => item.id === folderId);
+    if (!folderId) return 'Личное';
+    const f = folders.find((item) => item.id === folderId && !item.deleted);
     return f ? f.name : 'Личное';
   };
 
@@ -344,20 +352,42 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 Все
               </button>
 
-              {folders.map((folder) => {
+              {activeFolders.map((folder) => {
                 const isActive = selectedFolderId === folder.id;
                 return (
-                  <button
-                    key={folder.id}
-                    onClick={() => setSelectedFolderId(folder.id)}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
-                      isActive
-                        ? 'bg-[#EFEAFD] text-[#6355C7] dark:bg-[#252238] dark:text-[#A79AF3] font-semibold'
-                        : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
-                    }`}
-                  >
-                    {folder.name}
-                  </button>
+                  <div key={folder.id} className="relative group inline-flex items-center">
+                    <button
+                      onClick={() => setSelectedFolderId(folder.id)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                        isActive
+                          ? 'bg-[#EFEAFD] text-[#6355C7] dark:bg-[#252238] dark:text-[#A79AF3] font-semibold pr-2'
+                          : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <span>{folder.name}</span>
+                      {onDeleteFolder && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Удалить раздел «${folder.name}»? Тетради из этого раздела останутся на месте.`)) {
+                              onDeleteFolder(folder.id);
+                              if (selectedFolderId === folder.id) {
+                                setSelectedFolderId('all');
+                              }
+                            }
+                          }}
+                          title="Удалить раздел"
+                          className={`p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition-opacity ${
+                            isActive ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'
+                          }`}
+                        >
+                          <X className="w-3 h-3" />
+                        </span>
+                      )}
+                    </button>
+                  </div>
                 );
               })}
 

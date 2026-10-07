@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS public.folders (
     icon TEXT,
     color TEXT,
     created_at BIGINT NOT NULL,
-    updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+    updated_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint,
+    deleted BOOLEAN NOT NULL DEFAULT false
 );
 
 ALTER TABLE public.folders ENABLE ROW LEVEL SECURITY;
@@ -80,26 +81,48 @@ CREATE INDEX IF NOT EXISTS idx_pages_notebook ON public.pages(notebook_id, order
 CREATE INDEX IF NOT EXISTS idx_pages_user ON public.pages(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_folders_user ON public.folders(user_id);
 
--- 4. Supabase Storage bucket for page images
+-- 4. Supabase Storage bucket for page images (private bucket)
 INSERT INTO storage.buckets (id, name, public)
-VALUES ('page-images', 'page-images', true)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('page-images', 'page-images', false)
+ON CONFLICT (id) DO UPDATE SET public = false;
 
 -- Storage RLS Policies
 CREATE POLICY "Users can upload their own page images"
     ON storage.objects
     FOR INSERT
     TO authenticated
-    WITH CHECK (bucket_id = 'page-images' AND (storage.foldername(name))[1] = auth.uid()::text);
+    WITH CHECK (
+        bucket_id = 'page-images' 
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    );
 
-CREATE POLICY "Users can view page images"
+CREATE POLICY "Users can view their own page images"
     ON storage.objects
     FOR SELECT
-    TO public
-    USING (bucket_id = 'page-images');
+    TO authenticated
+    USING (
+        bucket_id = 'page-images' 
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    );
 
-CREATE POLICY "Users can update and delete their own images"
+CREATE POLICY "Users can update their own page images"
+    ON storage.objects
+    FOR UPDATE
+    TO authenticated
+    USING (
+        bucket_id = 'page-images' 
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    )
+    WITH CHECK (
+        bucket_id = 'page-images' 
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    );
+
+CREATE POLICY "Users can delete their own page images"
     ON storage.objects
     FOR DELETE
     TO authenticated
-    USING (bucket_id = 'page-images' AND (storage.foldername(name))[1] = auth.uid()::text);
+    USING (
+        bucket_id = 'page-images' 
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    );

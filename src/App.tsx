@@ -292,17 +292,45 @@ export default function App() {
 
   // Create folder
   const handleCreateFolder = (name: string) => {
+    const now = Date.now();
     const newFolder: Folder = {
-      id: `folder_${Date.now()}`,
+      id: `folder_${now}`,
       name,
       icon: 'folder',
       color: '#3B82F6',
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
+      deleted: false,
     };
     const updated = [...folders, newFolder];
     setFolders(updated);
     dbSaveFolders(updated);
+    syncManager.syncNow();
     showToast(`Раздел «${name}» создан`);
+  };
+
+  // Delete folder (marks folder deleted, resets notebook folderId to null without deleting notebooks)
+  const handleDeleteFolder = (folderId: string) => {
+    const now = Date.now();
+    const updatedFolders = folders.map((f) =>
+      f.id === folderId ? { ...f, deleted: true, updatedAt: now } : f
+    );
+    setFolders(updatedFolders);
+    dbSaveFolders(updatedFolders);
+
+    // Notebooks from deleted folder stay in place with folderId = null
+    const updatedNotebooks = notebooks.map((nb) => {
+      if (nb.folderId === folderId) {
+        const updatedNb = { ...nb, folderId: null, updatedAt: now };
+        dbSaveNotebook(updatedNb);
+        return updatedNb;
+      }
+      return nb;
+    });
+    setNotebooks(updatedNotebooks);
+
+    syncManager.syncNow();
+    showToast('Раздел удалён');
   };
 
   // Import .noto file
@@ -534,6 +562,7 @@ export default function App() {
           onRenameNotebook={handleRenameNotebook}
           onDuplicateNotebook={handleDuplicateNotebook}
           onDeleteNotebook={handleDeleteNotebook}
+          onDeleteFolder={handleDeleteFolder}
           onToggleFavorite={handleToggleFavorite}
           onCreateFolder={handleCreateFolder}
           onImportNotoFile={handleImportNotoFile}

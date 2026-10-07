@@ -124,6 +124,8 @@ export interface Folder {
   icon?: string;
   color?: string;
   createdAt: number;
+  updatedAt?: number;
+  deleted?: boolean;
 }
 
 export interface Notebook {

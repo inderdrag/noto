@@ -1,14 +1,26 @@
 import { Page, PageBackground, Stroke, Shape, TextObject, ImageObject, SelectionBox } from '../types';
+import { getResolvedImageUrl } from '../sync/imageStorage';
 
 // In-memory cache for loaded HTMLImageElements
 const imageCache = new Map<string, HTMLImageElement>();
+let globalImageLoadCallback: (() => void) | null = null;
+
+export function setGlobalImageLoadCallback(callback: (() => void) | null) {
+  globalImageLoadCallback = callback;
+}
 
 export function getCachedImage(src: string): HTMLImageElement | null {
+  if (!src) return null;
   if (imageCache.has(src)) {
     const img = imageCache.get(src)!;
     return img.complete && img.naturalWidth > 0 ? img : null;
   }
   const img = new Image();
+  img.onload = () => {
+    if (globalImageLoadCallback) {
+      globalImageLoadCallback();
+    }
+  };
   img.src = src;
   imageCache.set(src, img);
   return null;
@@ -425,7 +437,8 @@ export function renderText(ctx: CanvasRenderingContext2D, textObj: TextObject) {
  * Renders an image object
  */
 export function renderImage(ctx: CanvasRenderingContext2D, imgObj: ImageObject) {
-  const img = getCachedImage(imgObj.src);
+  const effectiveSrc = getResolvedImageUrl(imgObj.src) || imgObj.src;
+  const img = getCachedImage(effectiveSrc);
   if (!img) return;
 
   ctx.save();

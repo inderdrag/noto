@@ -2,9 +2,6 @@ name: Build & Release Android (APK & AAB)
 
 on:
   push:
-    branches:
-      - main
-      - master
     tags:
       - 'v*'
   workflow_dispatch:
@@ -34,9 +31,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install --legacy-peer-deps
+          npm ci --legacy-peer-deps
 
       - name: Build web application
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
       - name: Sync Capacitor Android
@@ -68,7 +68,7 @@ jobs:
             K_ALIAS="${ANDROID_KEY_ALIAS}"
             K_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
           else
-            echo "::warning::No keystore secret found in GitHub Secrets. Using generated release key."
+            echo "::warning::ВНИМАНИЕ: Секреты для подписи (ANDROID_KEYSTORE_BASE64 и др.) не найдены в GitHub Secrets! Сгенерирован временный тестовый ключ. ВНИМАНИЕ: Такой APK НЕЛЬЗЯ использовать в Google Play! При установке на устройство его нужно ставить после полного удаления прежней версии приложения из-за несовпадения сертификатов подписи."
             keytool -genkeypair -v -keystore release.keystore -alias noto-key -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass notoreleasepass -keypass notoreleasepass \
               -dname "CN=Noto Digital Notebook, OU=Mobile, O=Noto, L=Worldwide, C=US"

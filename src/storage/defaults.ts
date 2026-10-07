@@ -41,9 +41,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * Creates initial starter notebooks demonstrating academic & personal notebooks
  */
 export function createStarterData(): { notebooks: Notebook[]; folders: Folder[] } {
+  const now = Date.now();
   const folders: Folder[] = [
-    { id: 'folder_study', name: 'Учёба', icon: 'folder', color: '#3B82F6', createdAt: Date.now() },
-    { id: 'folder_personal', name: 'Личное', icon: 'bookmark', color: '#10B981', createdAt: Date.now() },
+    { id: 'folder_study', name: 'Учёба', icon: 'folder', color: '#3B82F6', createdAt: now, updatedAt: now, deleted: false },
+    { id: 'folder_personal', name: 'Личное', icon: 'bookmark', color: '#10B981', createdAt: now, updatedAt: now, deleted: false },
   ];
 
   const mathPage1: Page = {

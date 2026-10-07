@@ -35,6 +35,9 @@ jobs:
           node -e "const fs = require('fs'); const targets = ['node_modules/@tailwindcss/node/node_modules/lightningcss', 'node_modules/lightningcss']; const src = 'node_modules/lightningcss-win32-x64-msvc/lightningcss.win32-x64-msvc.node'; targets.forEach(t => { if (fs.existsSync(t) && fs.existsSync(src)) { fs.copyFileSync(src, t + '/lightningcss.win32-x64-msvc.node'); console.log('Copied win32 node binary to ' + t); } });"
 
       - name: Build web application
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
       - name: Ensure Windows icons exist
@@ -50,6 +53,9 @@ jobs:
           ls -la build/
 
       - name: Build Windows Installer (.exe)
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npx electron-builder --win --x64 --publish never
 
       - name: Verify build output

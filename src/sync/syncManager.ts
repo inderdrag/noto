@@ -192,7 +192,26 @@ export class SyncManager {
     try {
       const userId = user.id;
 
-      // 1. Process target notebook or queued items
+      // 1. Push Folders FIRST (to ensure foreign key references in notebooks remain valid)
+      const localFolders = await dbGetFolders();
+      for (const f of localFolders) {
+        const { error: folderError } = await supabase.from('folders').upsert({
+          id: f.id,
+          user_id: userId,
+          name: f.name,
+          icon: f.icon || null,
+          color: f.color || null,
+          created_at: f.createdAt,
+          updated_at: f.updatedAt || f.createdAt,
+          deleted: Boolean(f.deleted),
+        });
+
+        if (folderError) {
+          console.warn('[SyncManager] Folder upsert error:', folderError.message);
+        }
+      }
+
+      // 2. Push Notebooks SECOND
       const notebooksToPush: Notebook[] = [];
       if (targetNotebook) {
         notebooksToPush.push(targetNotebook);
@@ -201,13 +220,23 @@ export class SyncManager {
         notebooksToPush.push(...localNbs);
       }
 
+      // Set of deleted folder IDs to avoid dangling references
+      const locallyDeletedFolderIds = new Set(
+        localFolders.filter((f) => f.deleted).map((f) => f.id)
+      );
+
       for (const nb of notebooksToPush) {
+        // If notebook references a deleted folder, reset folderId to null
+        const effectiveFolderId = (nb.folderId && !locallyDeletedFolderIds.has(nb.folderId))
+          ? nb.folderId
+          : null;
+
         // Upsert Notebook Record
         const { error: nbError } = await supabase.from('notebooks').upsert({
           id: nb.id,
           user_id: userId,
           title: nb.title,
-          folder_id: nb.folderId || null,
+          folder_id: effectiveFolderId,
           cover_color: nb.coverColor,
           cover_pattern: nb.coverPattern || 'plain',
           current_page_id: nb.currentPageId,
@@ -221,7 +250,7 @@ export class SyncManager {
           console.warn('[SyncManager] Notebook upsert error:', nbError.message);
         }
 
-        // Upsert each Page as a separate record
+        // 3. Push Pages THIRD (for each notebook)
         for (const page of nb.pages || []) {
           // Process and upload base64 images to Supabase Storage bucket
           if (page.images && page.images.length > 0) {
@@ -280,21 +309,70 @@ export class SyncManager {
         }
       }
 
-      // 2. Push Folders
-      const localFolders = await dbGetFolders();
-      for (const f of localFolders) {
-        await supabase.from('folders').upsert({
-          id: f.id,
-          user_id: userId,
-          name: f.name,
-          icon: f.icon || null,
-          color: f.color || null,
-          created_at: f.createdAt,
-          updated_at: f.createdAt,
-        });
+      // 4. Pull Remote Folders
+      const { data: remoteFolders } = await supabase
+        .from('folders')
+        .select('*')
+        .eq('user_id', userId);
+
+      let finalFolders = localFolders;
+      if (remoteFolders && remoteFolders.length > 0) {
+        const localFolderMap = new Map(localFolders.map((f) => [f.id, f]));
+        const mergedFolders: Folder[] = [];
+        let hasFolderChanges = false;
+
+        for (const rf of remoteFolders) {
+          const locF = localFolderMap.get(rf.id);
+          const rfUpdatedAt = Number(rf.updated_at) || Number(rf.created_at);
+          const rfDeleted = Boolean(rf.deleted);
+
+          if (!locF) {
+            mergedFolders.push({
+              id: rf.id,
+              name: rf.name,
+              icon: rf.icon,
+              color: rf.color,
+              createdAt: Number(rf.created_at),
+              updatedAt: rfUpdatedAt,
+              deleted: rfDeleted,
+            });
+            hasFolderChanges = true;
+          } else {
+            const locUpdatedAt = locF.updatedAt || locF.createdAt;
+            if (rfUpdatedAt > locUpdatedAt) {
+              mergedFolders.push({
+                id: rf.id,
+                name: rf.name,
+                icon: rf.icon,
+                color: rf.color,
+                createdAt: locF.createdAt,
+                updatedAt: rfUpdatedAt,
+                deleted: rfDeleted,
+              });
+              hasFolderChanges = true;
+            } else {
+              mergedFolders.push(locF);
+            }
+            localFolderMap.delete(rf.id);
+          }
+        }
+
+        for (const remaining of localFolderMap.values()) {
+          mergedFolders.push(remaining);
+        }
+
+        finalFolders = mergedFolders;
+        if (hasFolderChanges) {
+          await dbSaveFolders(finalFolders);
+        }
       }
 
-      // 3. Pull Remote Notebooks & Pages that may have changed on other devices
+      // Collect all deleted folder IDs
+      const allDeletedFolderIds = new Set(
+        finalFolders.filter((f) => f.deleted).map((f) => f.id)
+      );
+
+      // 5. Pull Remote Notebooks & Pages that may have changed on other devices
       const { data: remoteNotebooks } = await supabase
         .from('notebooks')
         .select('*')
@@ -331,13 +409,18 @@ export class SyncManager {
               deleted: p.deleted,
             }));
 
+          // If notebook folder is deleted, reset folderId to null
+          const resolvedFolderId = (remNb.folder_id && !allDeletedFolderIds.has(remNb.folder_id))
+            ? remNb.folder_id
+            : null;
+
           const localNb = localNbMap.get(remNb.id);
           if (!localNb) {
             // New remote notebook: add to local
             const assembled: Notebook = {
               id: remNb.id,
               title: remNb.title,
-              folderId: remNb.folder_id,
+              folderId: resolvedFolderId,
               coverColor: remNb.cover_color,
               coverPattern: remNb.cover_pattern || 'plain',
               pages: pagesForNb,
@@ -350,7 +433,7 @@ export class SyncManager {
             hasRemoteUpdates = true;
           } else {
             // Merge pages
-            if (remNb.updated_at > localNb.updatedAt) {
+            if (remNb.updated_at > localNb.updatedAt || (localNb.folderId && allDeletedFolderIds.has(localNb.folderId))) {
               const mergedPages: Page[] = [];
               const localPageMap = new Map((localNb.pages || []).map((p) => [p.id, p]));
 
@@ -372,7 +455,7 @@ export class SyncManager {
               const updatedLocalNb: Notebook = {
                 ...localNb,
                 title: remNb.title,
-                folderId: remNb.folder_id,
+                folderId: resolvedFolderId,
                 coverColor: remNb.cover_color,
                 coverPattern: remNb.cover_pattern || localNb.coverPattern,
                 favorite: Boolean(remNb.favorite),
@@ -385,21 +468,13 @@ export class SyncManager {
           }
         }
 
-        // 4. Pull Remote Folders
-        const { data: remoteFolders } = await supabase
-          .from('folders')
-          .select('*')
-          .eq('user_id', userId);
-
-        if (remoteFolders && remoteFolders.length > 0) {
-          const mergedFolders: Folder[] = remoteFolders.map((rf) => ({
-            id: rf.id,
-            name: rf.name,
-            icon: rf.icon,
-            color: rf.color,
-            createdAt: rf.created_at,
-          }));
-          await dbSaveFolders(mergedFolders);
+        // Also check if any existing local notebook has a folder that was just deleted
+        for (const locNb of localNotebooks) {
+          if (locNb.folderId && allDeletedFolderIds.has(locNb.folderId)) {
+            const updated = { ...locNb, folderId: null, updatedAt: Date.now() };
+            await dbSaveNotebook(updated);
+            hasRemoteUpdates = true;
+          }
         }
 
         if (hasRemoteUpdates && this.onRemoteUpdateCallback) {

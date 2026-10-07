@@ -51,7 +51,8 @@ import {
   HistoryEntry, 
   SelectionBox 
 } from '../types';
-import { renderPage, isColorDark, renderShape } from '../drawing-engine/renderer';
+import { renderPage, isColorDark, renderShape, setGlobalImageLoadCallback } from '../drawing-engine/renderer';
+import { preparePageImages, subscribeImageResolved } from '../sync/imageStorage';
 import { strokeIntersectsCircle, sliceStrokeByEraser, pointInRect, smoothPoints, getStrokeBounds, getShapeBounds, distance } from '../drawing-engine/math';
 import { exportNotebookToPdf, exportPageAsImage, exportToNotoFile } from '../export/exporter';
 import { NotoIcon } from './NotoLogo';
@@ -527,6 +528,47 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     };
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
+  }, [repaintCanvas]);
+
+  // Preload and refresh private signed image URLs on page load and periodically before expiration (1 hr TTL)
+  useEffect(() => {
+    let isCancelled = false;
+    let refreshInterval: any = null;
+
+    const loadImages = async () => {
+      if (currentPage.images && currentPage.images.length > 0) {
+        await preparePageImages(currentPage);
+        if (!isCancelled) {
+          repaintCanvas();
+        }
+      }
+    };
+
+    loadImages();
+
+    // Auto-refresh signed URLs every 45 minutes to prevent expiration
+    refreshInterval = setInterval(() => {
+      loadImages();
+    }, 45 * 60 * 1000);
+
+    return () => {
+      isCancelled = true;
+      if (refreshInterval) clearInterval(refreshInterval);
+    };
+  }, [currentPage.id, currentPage.images, repaintCanvas]);
+
+  // Repaint canvas when new images complete loading or signed URLs resolve
+  useEffect(() => {
+    setGlobalImageLoadCallback(() => {
+      repaintCanvas();
+    });
+    const unsub = subscribeImageResolved(() => {
+      repaintCanvas();
+    });
+    return () => {
+      setGlobalImageLoadCallback(null);
+      unsub();
+    };
   }, [repaintCanvas]);
 
   const screenToPageCoord = useCallback(
