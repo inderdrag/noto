@@ -30,6 +30,7 @@ jobs:
         shell: bash
         run: |
           npm install --legacy-peer-deps
+          npm install --legacy-peer-deps @supabase/supabase-js@^2.117.3
           node -e "const fs = require('fs'); const targets = ['node_modules/@tailwindcss/node/node_modules/lightningcss', 'node_modules/lightningcss']; const src = 'node_modules/lightningcss-win32-x64-msvc/lightningcss.win32-x64-msvc.node'; targets.forEach(t => { if (fs.existsSync(t) && fs.existsSync(src)) { fs.copyFileSync(src, t + '/lightningcss.win32-x64-msvc.node'); console.log('Copied win32 node binary to ' + t); } });"
 
       - name: Build web application
