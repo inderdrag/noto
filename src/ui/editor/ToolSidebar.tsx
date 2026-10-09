@@ -59,10 +59,10 @@ export const ToolSidebar: React.FC<ToolSidebarProps> = ({
     return (
       <button
         onClick={onToggleOpen}
-        className={`absolute right-3 top-3 z-20 px-3 py-1.5 rounded-full border shadow-sm transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold ${
+        className={`absolute right-3 top-3 z-40 px-3 py-1.5 rounded-full border shadow-md transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold ${
           isDark 
-            ? 'bg-[#181928] border-neutral-700 text-neutral-300 hover:bg-neutral-800' 
-            : 'bg-white border-[#E2E4EC] text-neutral-700 hover:bg-neutral-50 shadow-2xs'
+            ? 'bg-[#181928] border-neutral-700 text-neutral-300 hover:bg-neutral-800 hover:text-white' 
+            : 'bg-white border-[#E2E4EC] text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900 shadow-2xs'
         }`}
         title="Развернуть параметры инструмента"
       >
@@ -101,8 +101,8 @@ export const ToolSidebar: React.FC<ToolSidebarProps> = ({
   ];
 
   return (
-    <aside className={`w-72 shrink-0 border-l flex flex-col justify-between p-4 select-none transition-all z-10 overflow-y-auto ${
-      isDark ? 'bg-[#12131F] border-neutral-800' : 'bg-white border-[#EAEBF2]'
+    <aside className={`w-72 sm:w-80 shrink-0 border-l flex flex-col justify-between p-4 select-none transition-all z-30 max-md:absolute max-md:right-0 max-md:top-0 max-md:bottom-0 max-md:z-40 max-md:shadow-2xl overflow-y-auto ${
+      isDark ? 'bg-[#12131F] border-neutral-800 text-white' : 'bg-white border-[#EAEBF2] text-neutral-900'
     }`}>
       <div className="space-y-4">
         {/* Header */}

@@ -71,7 +71,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.exe
@@ -80,6 +80,7 @@ jobs:
           body: |
             ### Релиз приложения Noto для Windows 🖥️
             - Скачайте **Noto-Setup-1.0.0.exe** для установки приложения на компьютер.
+            - **Мобильный интерфейс**: полноценный адаптивный дизайн для телефонов и планшетов (в портретном и альбомном режимах) с быстрыми панелями инструментов, карточками настройки пера/листа и вводом текста.
             - **Исправлено**: создание новых тетрадей теперь строго сохраняет выбранный раздел («Учёба», «Личное» и др.).
             - **Новая функция**: перенос тетрадей в любой раздел через меню карточки тетради.
             - **Оптимизация**: плавный рендеринг без лагов на ПК и мобильных устройствах, снижение нагрузки на процессор и видеокарту при простое до 0%.

@@ -60,6 +60,7 @@ import { EditorHeader } from './editor/EditorHeader';
 import { PagesSidebar } from './editor/PagesSidebar';
 import { ToolSidebar } from './editor/ToolSidebar';
 import { FloatingToolbar } from './editor/FloatingToolbar';
+import { MobileEditorView } from './editor/MobileEditorView';
 import { getStandardPageDimensions } from '../storage/db';
 
 interface EditorWorkspaceProps {
@@ -195,9 +196,21 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   const [isCoverPopoverOpen, setIsCoverPopoverOpen] = useState(false);
   const [isZoomMenuOpen, setIsZoomMenuOpen] = useState(false);
 
+  // Responsive screen size detection
+  const [windowSize, setWindowSize] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1200,
+    height: typeof window !== 'undefined' ? window.innerHeight : 800,
+  }));
+  const isMobile = windowSize.width < 768;
+  const isLandscapeScreen = windowSize.width > windowSize.height;
+
   // Responsive 3-pane layout states matching the design mockup
-  const [isPagesSidebarOpen, setIsPagesSidebarOpen] = useState(true);
-  const [isToolSidebarOpen, setIsToolSidebarOpen] = useState(true);
+  const [isPagesSidebarOpen, setIsPagesSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
+  const [isToolSidebarOpen, setIsToolSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
   const [isSheetFullscreen, setIsSheetFullscreen] = useState(false);
 
   const [isPagesDrawerOpen, setIsPagesDrawerOpen] = useState(false);
@@ -555,6 +568,16 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     repaintCanvas();
   }, [repaintCanvas]);
 
+  // Window resize listener to keep canvas sharp and viewport aligned
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+      repaintCanvas();
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [repaintCanvas]);
+
   // Preload and refresh private signed image URLs on page load and periodically before expiration (1 hr TTL)
   useEffect(() => {
     let isCancelled = false;
@@ -673,7 +696,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setIsZoomMenuOpen(false);
   };
 
-  // Fullscreen sheet mode toggle: collapses sidebars and zooms sheet to 100%
+  // Fullscreen sheet mode toggle: collapses sidebars and fits sheet to screen width
   const toggleSheetFullscreen = () => {
     if (!isSheetFullscreen) {
       setIsSheetFullscreen(true);
@@ -681,10 +704,10 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       setIsToolSidebarOpen(false);
       const canvas = canvasRef.current;
       const vWidth = canvas ? canvas.clientWidth : window.innerWidth;
-      const scale100 = 1.0;
-      setScale(scale100);
+      const fitScale = Math.max(0.3, Math.min(2.5, (vWidth - 48) / currentPage.width));
+      setScale(fitScale);
       setPan({
-        x: Math.max(20, (vWidth - currentPage.width * scale100) / 2),
+        x: Math.max(20, (vWidth - currentPage.width * fitScale) / 2),
         y: 28,
       });
     } else {
@@ -1699,6 +1722,32 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     setTimeout(() => setSaveSuccessFeedback(false), 2000);
   };
 
+  const handleFinishEditingText = () => {
+    if (editingText && editingText.text.trim()) {
+      const newTextObj: TextObject = {
+        id: `txt_${Date.now()}`,
+        x: editingText.x,
+        y: editingText.y,
+        width: Math.max(160, editingText.text.length * 9),
+        height: 50,
+        text: editingText.text,
+        fontSize: editingText.fontSize,
+        fontFamily: 'Inter, sans-serif',
+        color: editingText.color,
+        bold: editingText.bold,
+        italic: editingText.italic,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        deleted: false,
+      };
+      updateCurrentPage((page) => ({
+        ...page,
+        texts: [...(page.texts || []).filter((t) => t.id !== newTextObj.id), newTextObj],
+      }), 'Add text');
+    }
+    setEditingText(null);
+  };
+
   const currentRulingName = RULING_TYPES.find((r) => r.id === currentPage.background.type)?.name || 'Клетка';
   const hasSelectedItems = selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0;
 
@@ -1706,60 +1755,34 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     <div className={`flex-1 flex flex-col overflow-hidden font-sans select-none relative w-full h-full transition-colors ${
       isDark ? 'bg-[#0E0F14]' : 'bg-[#F7F8FC]'
     }`}>
-      {/* 1. Studio Header matching Image 2 */}
-      <EditorHeader
-        notebook={notebook}
-        currentPage={currentPage}
-        currentPageIndex={currentPageIndex}
-        totalPages={activePages.length}
-        currentRulingName={currentRulingName}
-        isSheetFullscreen={isSheetFullscreen}
-        theme={theme}
-        saveSuccessFeedback={saveSuccessFeedback}
-        onBackToLibrary={onBackToLibrary}
-        onPrevPage={handlePrevPage}
-        onNextPage={handleNextPage}
-        onAddPage={handleAddPage}
-        onClearPage={handleClearCanvas}
-        onToggleSheetFullscreen={toggleSheetFullscreen}
-        onToggleTheme={onToggleTheme}
-        onOpenExportModal={() => setIsExportModalOpen(true)}
-        onOpenRulingPopover={() => {
-          setIsRulingPopoverOpen(!isRulingPopoverOpen);
-          setIsPaperColorPopoverOpen(false);
-          setIsCoverPopoverOpen(false);
-        }}
-        onOpenPaperColorPopover={() => {
-          setIsPaperColorPopoverOpen(!isPaperColorPopoverOpen);
-          setIsRulingPopoverOpen(false);
-          setIsCoverPopoverOpen(false);
-        }}
-        onOpenCoverPopover={() => {
-          setIsCoverPopoverOpen(!isCoverPopoverOpen);
-          setIsRulingPopoverOpen(false);
-          setIsPaperColorPopoverOpen(false);
-        }}
-        isEditingTitle={isEditingTitle}
-        titleInput={titleInput}
-        onStartEditingTitle={() => setIsEditingTitle(true)}
-        onChangeTitleInput={setTitleInput}
-        onSubmitTitle={() => {
-          if (titleInput.trim()) onUpdateNotebook({ ...notebook, title: titleInput.trim() });
-          setIsEditingTitle(false);
-        }}
-      />
-
-      {/* 2. Three-Pane Workspace Layout */}
-      <div className="flex-1 flex overflow-hidden relative w-full h-full">
-        {/* Left: Pages Sidebar */}
-        <PagesSidebar
+      {/* 1. Mobile Interface matching the 6 user design mockups */}
+      {isMobile ? (
+        <MobileEditorView
           notebook={notebook}
-          currentPageId={currentPage.id}
-          isOpen={isPagesSidebarOpen && !isSheetFullscreen}
+          currentPage={currentPage}
+          currentPageIndex={currentPageIndex}
+          totalPages={activePages.length}
+          activePages={activePages}
           theme={theme}
-          onToggleOpen={() => setIsPagesSidebarOpen(!isPagesSidebarOpen)}
-          onSelectPage={(pageId) => onUpdateNotebook({ ...notebook, currentPageId: pageId })}
+          currentRulingName={currentRulingName}
+          activeTool={activeTool}
+          strokeColor={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeOpacity={strokeOpacity}
+          eraserMode={eraserMode}
+          eraserRadius={eraserRadius}
+          historyIndex={historyIndex}
+          historyLength={history.length}
+          scale={scale}
+          isLandscapeScreen={isLandscapeScreen}
+          editingText={editingText}
+          onBackToLibrary={onBackToLibrary}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onPrevPage={handlePrevPage}
+          onNextPage={handleNextPage}
           onAddPage={handleAddPage}
+          onSelectPage={(pageId) => onUpdateNotebook({ ...notebook, currentPageId: pageId })}
           onDeletePage={(pageId) => {
             const now = Date.now();
             const updatedPages = notebook.pages.map((pg) =>
@@ -1773,46 +1796,187 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
               updatedAt: now,
             });
           }}
+          onSelectTool={(tool) => {
+            setActiveTool(tool);
+            if (tool !== 'select') {
+              setSelectionBox(null);
+              setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+              setIsSelectionColorPickerOpen(false);
+            }
+          }}
+          onSetStrokeColor={setStrokeColor}
+          onSetStrokeWidth={setStrokeWidth}
+          onSetStrokeOpacity={setStrokeOpacity}
+          onSetEraserMode={setEraserMode}
+          onSetEraserRadius={setEraserRadius}
+          onSetRulingType={(t) => {
+            updateCurrentPage((page) => {
+              const isLand = page.width > page.height;
+              const dim = getStandardPageDimensions(t, isLand);
+              return {
+                ...page,
+                width: dim.width,
+                height: dim.height,
+                background: { ...page.background, type: t },
+              };
+            }, 'Смена разлиновки листа');
+          }}
+          onSetPaperColor={(color) => {
+            updateCurrentPage((page) => ({
+              ...page,
+              background: { ...page.background, color },
+            }), 'Смена цвета бумаги');
+          }}
+          onSetGridSize={(size) => {
+            updateCurrentPage((page) => ({
+              ...page,
+              background: { ...page.background, gridSize: size },
+            }));
+          }}
+          onTogglePageOrientation={togglePageOrientation}
+          onClearPage={handleClearCanvas}
+          onOpenExportModal={() => setIsExportModalOpen(true)}
+          onInsertImageClick={() => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = (e) => {
+              const f = (e.target as HTMLInputElement).files?.[0];
+              if (f) insertImageFile(f);
+            };
+            input.click();
+          }}
+          onFinishEditingText={handleFinishEditingText}
+          onChangeEditingText={(updates) => {
+            setEditingText((prev) => prev ? { ...prev, ...updates } : null);
+          }}
+          onToggleFitToWidth={handleToggleFitToWidth}
         />
+      ) : (
+        /* Desktop Studio Header */
+        <EditorHeader
+          notebook={notebook}
+          currentPage={currentPage}
+          currentPageIndex={currentPageIndex}
+          totalPages={activePages.length}
+          currentRulingName={currentRulingName}
+          isSheetFullscreen={isSheetFullscreen}
+          theme={theme}
+          saveSuccessFeedback={saveSuccessFeedback}
+          onBackToLibrary={onBackToLibrary}
+          onPrevPage={handlePrevPage}
+          onNextPage={handleNextPage}
+          onAddPage={handleAddPage}
+          onClearPage={handleClearCanvas}
+          onToggleSheetFullscreen={toggleSheetFullscreen}
+          onToggleTheme={onToggleTheme}
+          onOpenExportModal={() => setIsExportModalOpen(true)}
+          onOpenRulingPopover={() => {
+            setIsRulingPopoverOpen(!isRulingPopoverOpen);
+            setIsPaperColorPopoverOpen(false);
+            setIsCoverPopoverOpen(false);
+          }}
+          onOpenPaperColorPopover={() => {
+            setIsPaperColorPopoverOpen(!isPaperColorPopoverOpen);
+            setIsRulingPopoverOpen(false);
+            setIsCoverPopoverOpen(false);
+          }}
+          onOpenCoverPopover={() => {
+            setIsCoverPopoverOpen(!isCoverPopoverOpen);
+            setIsRulingPopoverOpen(false);
+            setIsPaperColorPopoverOpen(false);
+          }}
+          isEditingTitle={isEditingTitle}
+          titleInput={titleInput}
+          onStartEditingTitle={() => setIsEditingTitle(true)}
+          onChangeTitleInput={setTitleInput}
+          onSubmitTitle={() => {
+            if (titleInput.trim()) onUpdateNotebook({ ...notebook, title: titleInput.trim() });
+            setIsEditingTitle(false);
+          }}
+        />
+      )}
+
+      {/* 2. Workspace Layout */}
+      <div className="flex-1 flex overflow-hidden relative w-full h-full">
+        {/* Left: Pages Sidebar (Desktop only) */}
+        {!isMobile && (
+          <PagesSidebar
+            notebook={notebook}
+            currentPageId={currentPage.id}
+            isOpen={isPagesSidebarOpen}
+            theme={theme}
+            onToggleOpen={() => {
+              const next = !isPagesSidebarOpen;
+              setIsPagesSidebarOpen(next);
+              if (next && isSheetFullscreen) {
+                setIsSheetFullscreen(false);
+              }
+              if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+                setIsToolSidebarOpen(false);
+              }
+            }}
+            onSelectPage={(pageId) => onUpdateNotebook({ ...notebook, currentPageId: pageId })}
+            onAddPage={handleAddPage}
+            onDeletePage={(pageId) => {
+              const now = Date.now();
+              const updatedPages = notebook.pages.map((pg) =>
+                pg.id === pageId ? { ...pg, deleted: true, updatedAt: now } : pg
+              );
+              const remaining = updatedPages.filter((pg) => !pg.deleted);
+              onUpdateNotebook({
+                ...notebook,
+                pages: updatedPages,
+                currentPageId: remaining[0]?.id || pageId,
+                updatedAt: now,
+              });
+            }}
+          />
+        )}
 
         {/* Center: Main Canvas Sheet Viewport */}
         <main className="flex-1 relative overflow-hidden flex flex-col items-center justify-center">
-          {/* Top Floating Pill Toolbar */}
-          <FloatingToolbar
-            activeTool={activeTool}
-            showToolOptions={showToolOptions}
-            eraserMode={eraserMode}
-            eraserRadius={eraserRadius}
-            historyIndex={historyIndex}
-            historyLength={history.length}
-            theme={theme}
-            onSelectTool={(tool) => {
-              setActiveTool(tool);
-              if (tool !== 'select') {
-                setSelectionBox(null);
-                setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
-                setIsSelectionColorPickerOpen(false);
-              }
-              if (!isToolSidebarOpen && !isSheetFullscreen) {
-                setIsToolSidebarOpen(true);
-              }
-            }}
-            onToggleToolOptions={() => setShowToolOptions(!showToolOptions)}
-            onSetEraserMode={setEraserMode}
-            onSetEraserRadius={setEraserRadius}
-            onUndo={handleUndo}
-            onRedo={handleRedo}
-            onInsertImageClick={() => {
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.accept = 'image/*';
-              input.onchange = (e) => {
-                const f = (e.target as HTMLInputElement).files?.[0];
-                if (f) insertImageFile(f);
-              };
-              input.click();
-            }}
-          />
+          {/* Top Floating Pill Toolbar (Desktop only) */}
+          {!isMobile && (
+            <FloatingToolbar
+              activeTool={activeTool}
+              showToolOptions={showToolOptions}
+              eraserMode={eraserMode}
+              eraserRadius={eraserRadius}
+              historyIndex={historyIndex}
+              historyLength={history.length}
+              theme={theme}
+              onSelectTool={(tool) => {
+                setActiveTool(tool);
+                if (tool !== 'select') {
+                  setSelectionBox(null);
+                  setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+                  setIsSelectionColorPickerOpen(false);
+                }
+                if (!isToolSidebarOpen) {
+                  setIsToolSidebarOpen(true);
+                  if (isSheetFullscreen) {
+                    setIsSheetFullscreen(false);
+                  }
+                }
+              }}
+              onToggleToolOptions={() => setShowToolOptions(!showToolOptions)}
+              onSetEraserMode={setEraserMode}
+              onSetEraserRadius={setEraserRadius}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              onInsertImageClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                input.onchange = (e) => {
+                  const f = (e.target as HTMLInputElement).files?.[0];
+                  if (f) insertImageFile(f);
+                };
+                input.click();
+              }}
+            />
+          )}
 
           {/* Interactive Canvas on Desk */}
           <canvas
@@ -1997,7 +2161,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           {editingText && (
             <div
               className={`absolute z-40 p-2.5 rounded-2xl shadow-2xl border-2 border-[#6355C7] max-w-[calc(100vw-32px)] ${
-                isDark ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-900'
+                isDark ? 'bg-neutral-900/90 text-white backdrop-blur-md' : 'bg-white/90 text-neutral-900 backdrop-blur-md'
               }`}
               style={{
                 left: Math.max(16, Math.min(window.innerWidth - 270, pan.x + editingText.x * scale)),
@@ -2013,239 +2177,236 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                 className={`w-60 p-2 text-sm bg-transparent border-none resize-none focus:outline-none ${
                   isDark ? 'text-white' : 'text-neutral-900'
                 }`}
+                style={{
+                  fontSize: `${editingText.fontSize}px`,
+                  fontWeight: editingText.bold ? 'bold' : 'normal',
+                  fontStyle: editingText.italic ? 'italic' : 'normal',
+                  color: editingText.color,
+                }}
               />
-              <div className="flex items-center justify-end gap-1.5 mt-1">
-                <button
-                  onClick={() => setEditingText(null)}
-                  className={`px-2.5 py-1 text-xs font-semibold ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-950'}`}
+              {!isMobile && (
+                <div className="flex items-center justify-end gap-1.5 mt-1">
+                  <button
+                    onClick={() => setEditingText(null)}
+                    className={`px-2.5 py-1 text-xs font-semibold ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-950'}`}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={handleFinishEditingText}
+                    className="px-3.5 py-1 text-xs font-bold rounded-lg shadow-xs bg-[#6355C7] text-white hover:bg-[#5244B4]"
+                  >
+                    Вставить
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bottom Floating Status Bar & Sheet Zoom Controls (Desktop only) */}
+          {!isMobile && (
+            <div className="absolute bottom-4 right-6 z-30 pointer-events-auto flex items-center gap-2">
+              {/* Zoom Presets Popover */}
+              {isZoomMenuOpen && (
+                <div
+                  data-popover="true"
+                  onClick={(e) => e.stopPropagation()}
+                  className={`absolute bottom-full mb-2 right-0 w-52 p-1.5 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-150 z-50 text-xs font-semibold ${
+                    isDark
+                      ? 'bg-[#181928] border-neutral-700 text-neutral-200'
+                      : 'bg-white border-neutral-200 text-neutral-800 shadow-xl'
+                  }`}
                 >
-                  Отмена
+                  <div className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                    Масштаб листа
+                  </div>
+                  {[
+                    { label: '50%', value: 0.50 },
+                    { label: '70% (По умолчанию)', value: 0.70 },
+                    { label: '100% (1:1 Реальный)', value: 1.00 },
+                    { label: '125%', value: 1.25 },
+                    { label: '150%', value: 1.50 },
+                    { label: '200%', value: 2.00 },
+                    { label: '300%', value: 3.00 },
+                  ].map((item) => {
+                    const isSelected = Math.abs(scale - item.value) < 0.03;
+                    return (
+                      <button
+                        key={item.label}
+                        onClick={() => handleSetPresetZoom(item.value)}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
+                          isSelected
+                            ? isDark ? 'bg-[#252238] text-[#A79AF3] font-bold' : 'bg-[#EFEAFD] text-[#6355C7] font-bold'
+                            : isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
+                        }`}
+                      >
+                        <span>{item.label}</span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-[#6355C7]" />}
+                      </button>
+                    );
+                  })}
+                  <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-100'}`} />
+                  <button
+                    onClick={handleToggleFitToWidth}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
+                      isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Maximize2 className="w-3.5 h-3.5 text-[#6355C7]" />
+                      Вписать по ширине
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              {/* Bottom Dock Container */}
+              <div className={`flex items-center gap-1.5 backdrop-blur-xl px-3 py-1.5 rounded-2xl border shadow-xl text-xs font-semibold ${
+                isDark
+                  ? 'bg-[#12131F]/95 border-neutral-700/80 text-white'
+                  : 'bg-white/95 border-[#E2E4EC] text-neutral-800'
+              }`}>
+                {/* Page Navigator */}
+                <button
+                  onClick={handlePrevPage}
+                  disabled={currentPageIndex <= 0}
+                  className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                  title="Предыдущая страница"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
                 </button>
+                <span className="font-mono text-xs px-1 text-neutral-500 dark:text-neutral-400">
+                  {currentPageIndex + 1} / {activePages.length}
+                </span>
                 <button
-                  onClick={() => {
-                    if (editingText.text.trim()) {
-                      const newTextObj: TextObject = {
-                        id: `txt_${Date.now()}`,
-                        x: editingText.x,
-                        y: editingText.y,
-                        width: 250,
-                        height: 50,
-                        text: editingText.text,
-                        fontSize: editingText.fontSize,
-                        fontFamily: 'Inter, sans-serif',
-                        color: editingText.color,
-                        bold: editingText.bold,
-                        italic: editingText.italic,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now(),
-                        deleted: false,
-                      };
-                      updateCurrentPage((page) => ({
-                        ...page,
-                        texts: [...(page.texts || []), newTextObj],
-                      }), 'Add text');
-                    }
-                    setEditingText(null);
-                  }}
-                  className="px-3.5 py-1 text-xs font-bold rounded-lg shadow-xs bg-[#6355C7] text-white hover:bg-[#5244B4]"
+                  onClick={handleNextPage}
+                  disabled={currentPageIndex >= activePages.length - 1}
+                  className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                  title="Следующая страница"
                 >
-                  Вставить
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
+                <div className={`w-px h-3.5 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
+
+                {/* Zoom Out Button */}
+                <button
+                  onClick={() => handleZoomDelta(0.85)}
+                  className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                  title="Уменьшить масштаб (Ctrl -)"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Zoom Percentage */}
+                <button
+                  data-popover-trigger="true"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsZoomMenuOpen(!isZoomMenuOpen);
+                  }}
+                  className="px-2 py-0.5 rounded-lg font-mono text-xs font-bold hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                  title="Масштаб листа (клик для выбора)"
+                >
+                  {Math.round(scale * 100)}%
+                </button>
+
+                {/* Zoom In Button */}
+                <button
+                  onClick={() => handleZoomDelta(1.15)}
+                  className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                  title="Увеличить масштаб (Ctrl +)"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+
+                <div className={`w-px h-3.5 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
+
+                {/* Fit / Fullscreen Sheet Toggle */}
+                <button
+                  onClick={toggleSheetFullscreen}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isSheetFullscreen
+                      ? 'bg-[#6355C7] text-white shadow-xs font-semibold'
+                      : 'hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                  }`}
+                  title={isSheetFullscreen ? 'Вернуть обычный вид' : 'Вписать лист по ширине экрана'}
+                >
+                  <Maximize2 className="w-3.5 h-3.5 text-[#6355C7]" />
+                  <span>{isSheetFullscreen ? 'Обычный вид' : 'Вписать по ширине'}</span>
                 </button>
               </div>
             </div>
           )}
-
-          {/* Bottom Floating Status Bar & Sheet Zoom Controls */}
-          <div className="absolute bottom-4 right-6 z-30 pointer-events-auto flex items-center gap-2">
-            {/* Zoom Presets Popover */}
-            {isZoomMenuOpen && (
-              <div
-                data-popover="true"
-                onClick={(e) => e.stopPropagation()}
-                className={`absolute bottom-full mb-2 right-0 w-52 p-1.5 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-150 z-50 text-xs font-semibold ${
-                  isDark
-                    ? 'bg-[#181928] border-neutral-700 text-neutral-200'
-                    : 'bg-white border-neutral-200 text-neutral-800 shadow-xl'
-                }`}
-              >
-                <div className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                  Масштаб листа
-                </div>
-                {[
-                  { label: '50%', value: 0.50 },
-                  { label: '70% (По умолчанию)', value: 0.70 },
-                  { label: '100% (1:1 Реальный)', value: 1.00 },
-                  { label: '125%', value: 1.25 },
-                  { label: '150%', value: 1.50 },
-                  { label: '200%', value: 2.00 },
-                  { label: '300%', value: 3.00 },
-                ].map((item) => {
-                  const isSelected = Math.abs(scale - item.value) < 0.03;
-                  return (
-                    <button
-                      key={item.label}
-                      onClick={() => handleSetPresetZoom(item.value)}
-                      className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
-                        isSelected
-                          ? isDark ? 'bg-[#252238] text-[#A79AF3] font-bold' : 'bg-[#EFEAFD] text-[#6355C7] font-bold'
-                          : isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
-                      }`}
-                    >
-                      <span>{item.label}</span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-[#6355C7]" />}
-                    </button>
-                  );
-                })}
-                <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-100'}`} />
-                <button
-                  onClick={handleToggleFitToWidth}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-xl flex items-center justify-between transition-colors ${
-                    isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-700'
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <Maximize2 className="w-3.5 h-3.5 text-[#6355C7]" />
-                    Вписать по ширине
-                  </span>
-                </button>
-              </div>
-            )}
-
-            {/* Bottom Dock Container */}
-            <div className={`flex items-center gap-1.5 backdrop-blur-xl px-3 py-1.5 rounded-2xl border shadow-xl text-xs font-semibold ${
-              isDark
-                ? 'bg-[#12131F]/95 border-neutral-700/80 text-white'
-                : 'bg-white/95 border-[#E2E4EC] text-neutral-800'
-            }`}>
-              {/* Page Navigator */}
-              <button
-                onClick={handlePrevPage}
-                disabled={currentPageIndex <= 0}
-                className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-                title="Предыдущая страница"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <span className="font-mono text-xs px-1 text-neutral-500 dark:text-neutral-400">
-                {currentPageIndex + 1} / {activePages.length}
-              </span>
-              <button
-                onClick={handleNextPage}
-                disabled={currentPageIndex >= activePages.length - 1}
-                className="p-1 rounded-lg disabled:opacity-20 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-                title="Следующая страница"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-
-              <div className={`w-px h-3.5 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-              {/* Zoom Out Button */}
-              <button
-                onClick={() => handleZoomDelta(0.85)}
-                className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-                title="Уменьшить масштаб (Ctrl -)"
-              >
-                <ZoomOut className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Zoom Percentage */}
-              <button
-                data-popover-trigger="true"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsZoomMenuOpen(!isZoomMenuOpen);
-                }}
-                className="px-2 py-0.5 rounded-lg font-mono text-xs font-bold hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
-                title="Масштаб листа (клик для выбора)"
-              >
-                {Math.round(scale * 100)}%
-              </button>
-
-              {/* Zoom In Button */}
-              <button
-                onClick={() => handleZoomDelta(1.15)}
-                className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-                title="Увеличить масштаб (Ctrl +)"
-              >
-                <ZoomIn className="w-3.5 h-3.5" />
-              </button>
-
-              <div className={`w-px h-3.5 mx-1 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
-
-              {/* Fit / Fullscreen Sheet Toggle ("так же лист на весь экран при желании может увеличиваться") */}
-              <button
-                onClick={toggleSheetFullscreen}
-                className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
-                  isSheetFullscreen
-                    ? 'bg-[#6355C7] text-white shadow-xs font-semibold'
-                    : 'hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
-                }`}
-                title="Развернуть лист во весь экран (скрыть панели и увеличить обзор)"
-              >
-                <Maximize2 className="w-3.5 h-3.5 text-[#6355C7]" />
-                <span>{isSheetFullscreen ? 'Обычный вид' : 'Полноэкранный лист'}</span>
-              </button>
-            </div>
-          </div>
         </main>
 
-        {/* Right: Tool Sidebar */}
-        <ToolSidebar
-          activeTool={activeTool}
-          strokeColor={strokeColor}
-          strokeWidth={strokeWidth}
-          strokeOpacity={strokeOpacity}
-          eraserMode={eraserMode}
-          eraserRadius={eraserRadius}
-          currentRulingType={currentPage.background.type}
-          currentRulingName={currentRulingName}
-          currentPaperColor={currentPage.background.color}
-          currentGridSize={currentPage.background.gridSize || (currentPage.background.type === 'ruled' ? 32 : 24)}
-          isLandscape={currentPage.width > currentPage.height}
-          isOpen={isToolSidebarOpen && !isSheetFullscreen}
-          theme={theme}
-          onToggleOpen={() => setIsToolSidebarOpen(!isToolSidebarOpen)}
-          onSetStrokeColor={setStrokeColor}
-          onSetStrokeWidth={setStrokeWidth}
-          onSetStrokeOpacity={setStrokeOpacity}
-          onSetEraserMode={setEraserMode}
-          onSetEraserRadius={setEraserRadius}
-          onSetRulingType={(t) => {
-            updateCurrentPage((page) => {
-              const isLand = page.width > page.height;
-              const dim = getStandardPageDimensions(t, isLand);
-              return {
+        {/* Right: Tool Sidebar (Desktop only) */}
+        {!isMobile && (
+          <ToolSidebar
+            activeTool={activeTool}
+            strokeColor={strokeColor}
+            strokeWidth={strokeWidth}
+            strokeOpacity={strokeOpacity}
+            eraserMode={eraserMode}
+            eraserRadius={eraserRadius}
+            currentRulingType={currentPage.background.type}
+            currentRulingName={currentRulingName}
+            currentPaperColor={currentPage.background.color}
+            currentGridSize={currentPage.background.gridSize || (currentPage.background.type === 'ruled' ? 32 : 24)}
+            isLandscape={currentPage.width > currentPage.height}
+            isOpen={isToolSidebarOpen}
+            theme={theme}
+            onToggleOpen={() => {
+              const next = !isToolSidebarOpen;
+              setIsToolSidebarOpen(next);
+              if (next && isSheetFullscreen) {
+                setIsSheetFullscreen(false);
+              }
+              if (next && typeof window !== 'undefined' && window.innerWidth < 768) {
+                setIsPagesSidebarOpen(false);
+              }
+            }}
+            onSetStrokeColor={setStrokeColor}
+            onSetStrokeWidth={setStrokeWidth}
+            onSetStrokeOpacity={setStrokeOpacity}
+            onSetEraserMode={setEraserMode}
+            onSetEraserRadius={setEraserRadius}
+            onSetRulingType={(t) => {
+              updateCurrentPage((page) => {
+                const isLand = page.width > page.height;
+                const dim = getStandardPageDimensions(t, isLand);
+                return {
+                  ...page,
+                  width: dim.width,
+                  height: dim.height,
+                  background: { ...page.background, type: t },
+                };
+              }, 'Смена разлиновки листа');
+            }}
+            onSetGridSize={(size) => {
+              updateCurrentPage((page) => ({
                 ...page,
-                width: dim.width,
-                height: dim.height,
-                background: { ...page.background, type: t },
-              };
-            }, 'Смена разлиновки листа');
-          }}
-          onSetGridSize={(size) => {
-            updateCurrentPage((page) => ({
-              ...page,
-              background: { ...page.background, gridSize: size },
-            }));
-          }}
-          onSetPaperColor={(c) => {
-            updateCurrentPage((page) => ({
-              ...page,
-              background: { ...page.background, color: c },
-            }));
+                background: { ...page.background, gridSize: size },
+              }));
+            }}
+            onSetPaperColor={(c) => {
+              updateCurrentPage((page) => ({
+                ...page,
+                background: { ...page.background, color: c },
+              }), 'Смена цвета листа');
 
-            // Automatically switch pen color:
-            // Dark paper (Midnight, Графит) -> White (#FFFFFF)
-            // Light paper (Белая, Крем) -> Black (#0F172A)
-            if (isColorDark(c)) {
-              setStrokeColor('#FFFFFF');
-            } else {
-              setStrokeColor('#0F172A');
-            }
-          }}
-          onToggleOrientation={togglePageOrientation}
-        />
+              // Automatically switch pen color:
+              // Dark paper (Midnight, Графит) -> White (#FFFFFF)
+              // Light paper (Белая, Крем) -> Black (#0F172A)
+              if (isColorDark(c)) {
+                setStrokeColor('#FFFFFF');
+              } else {
+                setStrokeColor('#0F172A');
+              }
+            }}
+            onToggleOrientation={togglePageOrientation}
+          />
+        )}
       </div>
 
       {/* Popover: Ruling Selector */}

@@ -30,20 +30,21 @@ export const PagesSidebar: React.FC<PagesSidebarProps> = ({
     return (
       <button
         onClick={onToggleOpen}
-        className={`absolute left-3 top-4 z-20 p-1.5 rounded-full border shadow-sm transition-colors cursor-pointer ${
+        className={`absolute left-3 top-4 z-40 px-3 py-1.5 rounded-full border shadow-md transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold ${
           isDark 
-            ? 'bg-[#181928] border-neutral-700 text-neutral-300 hover:bg-neutral-800' 
-            : 'bg-white border-neutral-200 text-neutral-700 hover:bg-neutral-50 shadow-2xs'
+            ? 'bg-[#181928] border-neutral-700 text-neutral-300 hover:bg-neutral-800 hover:text-white' 
+            : 'bg-white border-[#E2E4EC] text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900 shadow-2xs'
         }`}
         title="Показать страницы"
       >
-        <ChevronRight className="w-4 h-4" />
+        <ChevronRight className="w-3.5 h-3.5" />
+        <span>Страницы</span>
       </button>
     );
   }
 
   return (
-    <aside className={`w-44 shrink-0 border-r flex flex-col justify-between p-3 select-none transition-all z-10 ${
+    <aside className={`w-44 shrink-0 border-r flex flex-col justify-between p-3 select-none transition-all z-30 max-md:absolute max-md:left-0 max-md:top-0 max-md:bottom-0 max-md:z-40 max-md:shadow-2xl ${
       isDark ? 'bg-[#12131F] border-neutral-800' : 'bg-white border-[#EAEBF2]'
     }`}>
       <div>
