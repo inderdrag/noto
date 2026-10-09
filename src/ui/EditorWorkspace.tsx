@@ -520,14 +520,39 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     ctx.restore(); // restore pan/scale
   }, [currentPage, pan, scale, selectionBox, theme]);
 
-  useEffect(() => {
-    let animId: number;
-    const loop = () => {
+  // Interactive Render Scheduler:
+  // Runs smooth 60fps/120fps requestAnimationFrame loop ONLY during active drawing or pan/zoom.
+  // When idle, loop stops completely so CPU/GPU usage is 0%, preventing thermal throttling, lag, and battery drain.
+  const isInteractingRef = useRef(false);
+  const animFrameIdRef = useRef<number | null>(null);
+
+  const startInteractionLoop = useCallback(() => {
+    isInteractingRef.current = true;
+    if (animFrameIdRef.current !== null) return;
+    const tick = () => {
       repaintCanvas();
-      animId = requestAnimationFrame(loop);
+      if (isInteractingRef.current) {
+        animFrameIdRef.current = requestAnimationFrame(tick);
+      } else {
+        animFrameIdRef.current = null;
+      }
     };
-    animId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animId);
+    animFrameIdRef.current = requestAnimationFrame(tick);
+  }, [repaintCanvas]);
+
+  const stopInteractionLoop = useCallback(() => {
+    isInteractingRef.current = false;
+    if (animFrameIdRef.current !== null) {
+      cancelAnimationFrame(animFrameIdRef.current);
+      animFrameIdRef.current = null;
+    }
+    // Final clean repaint
+    repaintCanvas();
+  }, [repaintCanvas]);
+
+  // Immediate repaint on reactive state changes (page, pan, scale, selectionBox, theme)
+  useEffect(() => {
+    repaintCanvas();
   }, [repaintCanvas]);
 
   // Preload and refresh private signed image URLs on page load and periodically before expiration (1 hr TTL)
@@ -897,12 +922,14 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     if (isSpacePressed || activeTool === 'pan' || e.button === 1) {
       setIsPanning(true);
       panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+      startInteractionLoop();
       return;
     }
 
     if (e.button !== 0) return;
 
     isPointerDownRef.current = true;
+    startInteractionLoop();
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -1264,6 +1291,8 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Pointer Up
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    stopInteractionLoop();
+
     if (e.pointerType === 'pen') {
       isPenActiveRef.current = false;
       lastPenTimeRef.current = Date.now();
@@ -1485,6 +1514,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       activeStrokeRef.current = null;
       activeShapeRef.current = null;
       isPointerDownRef.current = false;
+      startInteractionLoop();
 
       const t1 = e.touches[0];
       const t2 = e.touches[1];
@@ -1535,6 +1565,9 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     if (e.touches.length < 2) {
       touchDistanceRef.current = null;
       touchMidpointRef.current = null;
+    }
+    if (e.touches.length === 0) {
+      stopInteractionLoop();
     }
   };
 

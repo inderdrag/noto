@@ -63,13 +63,26 @@ jobs:
           echo "Files in release directory:"
           ls -la release/
 
+      - name: Upload Windows Installer (.exe) Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: noto-windows-installer
+          path: release/*.exe
+          if-no-files-found: error
+
       - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.exe
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
           name: "Noto"
-          body: "Скачайте установщик Noto-Setup-1.0.0.exe для быстрой установки приложения Noto на компьютер Windows."
+          body: |
+            ### Релиз приложения Noto для Windows 🖥️
+            - Скачайте **Noto-Setup-1.0.0.exe** для установки приложения на компьютер.
+            - **Исправлено**: создание новых тетрадей теперь строго сохраняет выбранный раздел («Учёба», «Личное» и др.).
+            - **Новая функция**: перенос тетрадей в любой раздел через меню карточки тетради.
+            - **Оптимизация**: плавный рендеринг без лагов на ПК и мобильных устройствах, снижение нагрузки на процессор и видеокарту при простое до 0%.
           draft: false
           prerelease: false
         env:

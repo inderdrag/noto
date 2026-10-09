@@ -151,13 +151,18 @@ export default function App() {
   }, []);
 
   // Quick create notebook (Instant 1-click creation directly into full-screen editor)
-  const handleQuickCreateNotebook = () => {
+  const handleQuickCreateNotebook = (targetFolderId?: string | null) => {
     const newPageId = `page_${Date.now()}`;
     const dim = getStandardPageDimensions('grid', false);
+    let resolvedFolderId = targetFolderId;
+    if (resolvedFolderId === undefined) {
+      const personal = folders.find((f) => (f.id === 'folder_personal' || f.name.toLowerCase() === 'личное') && !f.deleted);
+      resolvedFolderId = personal ? personal.id : null;
+    }
     const newNb: Notebook = {
       id: `nb_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
       title: `Тетрадь ${notebooks.length + 1}`,
-      folderId: null,
+      folderId: resolvedFolderId,
       coverColor: '#2563EB',
       coverPattern: 'plain',
       pages: [
@@ -280,6 +285,16 @@ export default function App() {
     if (activeNotebookId === id) setActiveNotebookId(null);
     await dbDeleteNotebook(id);
     showToast(`Тетрадь «${title}» удалена`);
+  };
+
+  // Move notebook to folder
+  const handleMoveNotebook = (notebookId: string, folderId: string | null) => {
+    const nb = notebooks.find((n) => n.id === notebookId);
+    if (!nb) return;
+    const updated = { ...nb, folderId, updatedAt: Date.now() };
+    handleUpdateNotebook(updated);
+    const targetFolder = folders.find((f) => f.id === folderId);
+    showToast(`Перемещено в раздел «${targetFolder ? targetFolder.name : 'Личное'}»`);
   };
 
   // Toggle favorite
@@ -563,6 +578,7 @@ export default function App() {
           onDuplicateNotebook={handleDuplicateNotebook}
           onDeleteNotebook={handleDeleteNotebook}
           onDeleteFolder={handleDeleteFolder}
+          onMoveNotebook={handleMoveNotebook}
           onToggleFavorite={handleToggleFavorite}
           onCreateFolder={handleCreateFolder}
           onImportNotoFile={handleImportNotoFile}

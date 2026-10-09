@@ -23,11 +23,12 @@ interface LibraryViewProps {
   notebooks: Notebook[];
   folders: Folder[];
   onOpenNotebook: (id: string) => void;
-  onQuickCreateNotebook: () => void;
+  onQuickCreateNotebook: (folderId?: string | null) => void;
   onRenameNotebook: (id: string, newTitle: string) => void;
   onDuplicateNotebook: (id: string) => void;
   onDeleteNotebook: (id: string) => void;
   onDeleteFolder?: (id: string) => void;
+  onMoveNotebook?: (id: string, folderId: string | null) => void;
   onToggleFavorite: (id: string) => void;
   onCreateFolder: (name: string) => void;
   onImportNotoFile: (file: File) => void;
@@ -48,6 +49,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onDuplicateNotebook,
   onDeleteNotebook,
   onDeleteFolder,
+  onMoveNotebook,
   onToggleFavorite,
   onImportNotoFile,
   theme,
@@ -68,6 +70,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [newFolderName, setNewFolderName] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCreateNotebookInCurrentFolder = () => {
+    if (selectedFolderId !== 'all') {
+      onQuickCreateNotebook(selectedFolderId);
+    } else {
+      const personalFolder = folders.find((f) => (f.id === 'folder_personal' || f.name.toLowerCase() === 'личное') && !f.deleted);
+      onQuickCreateNotebook(personalFolder ? personalFolder.id : null);
+    }
+  };
 
   const handleConfirmRename = (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,7 +109,21 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const filteredNotebooks = useMemo(() => {
     return notebooks
       .filter((nb) => {
-        if (selectedFolderId !== 'all' && nb.folderId !== selectedFolderId) return false;
+        if (selectedFolderId !== 'all') {
+          const isSelectedPersonal =
+            selectedFolderId === 'folder_personal' ||
+            folders.find((f) => f.id === selectedFolderId)?.name.toLowerCase() === 'личное';
+
+          if (isSelectedPersonal) {
+            const matchesPersonal =
+              nb.folderId === selectedFolderId ||
+              nb.folderId === null ||
+              nb.folderId === undefined;
+            if (!matchesPersonal) return false;
+          } else {
+            if (nb.folderId !== selectedFolderId) return false;
+          }
+        }
         if (activeTab === 'favorites' && !nb.favorite) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
@@ -119,7 +144,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         }
         return b.updatedAt - a.updatedAt;
       });
-  }, [notebooks, selectedFolderId, activeTab, searchQuery, sortBy]);
+  }, [notebooks, selectedFolderId, folders, activeTab, searchQuery, sortBy]);
 
   // Most recent notebook for the "Продолжить с места остановки" widget
   const recentNotebook = useMemo(() => {
@@ -183,7 +208,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   const getFolderLabel = (folderId?: string | null) => {
-    if (!folderId) return 'Личное';
+    if (!folderId) {
+      const personalFolder = folders.find((item) => (item.id === 'folder_personal' || item.name.toLowerCase() === 'личное') && !item.deleted);
+      return personalFolder ? personalFolder.name : 'Личное';
+    }
     const f = folders.find((item) => item.id === folderId && !item.deleted);
     return f ? f.name : 'Личное';
   };
@@ -307,7 +335,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             Импорт
           </button>
           <button
-            onClick={onQuickCreateNotebook}
+            onClick={handleCreateNotebookInCurrentFolder}
             className="px-3.5 sm:px-5 py-2 text-xs font-semibold rounded-full bg-[#6355C7] hover:bg-[#5244B4] text-white transition-all shadow-sm cursor-pointer flex items-center gap-1.5 active:scale-98"
           >
             <span className="hidden xs:inline">+</span>
@@ -609,6 +637,39 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             >
                               <Download className="w-3.5 h-3.5" /> Экспорт .noto
                             </button>
+
+                            {/* Move to another section/folder */}
+                            {onMoveNotebook && activeFolders.length > 0 && (
+                              <div className="border-t my-1 pt-1 border-neutral-100 dark:border-neutral-800">
+                                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+                                  Раздел:
+                                </div>
+                                {activeFolders.map((f) => {
+                                  const isCurrent =
+                                    nb.folderId === f.id ||
+                                    (!nb.folderId && (f.id === 'folder_personal' || f.name.toLowerCase() === 'личное'));
+                                  return (
+                                    <button
+                                      key={f.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onMoveNotebook(nb.id, f.id);
+                                        setMenuOpenId(null);
+                                      }}
+                                      className={`w-full text-left px-3 py-1.5 text-xs rounded-lg flex items-center justify-between cursor-pointer ${
+                                        isCurrent
+                                          ? 'bg-[#EFEAFD] text-[#6355C7] dark:bg-[#252238] dark:text-[#A79AF3] font-semibold'
+                                          : 'hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300'
+                                      }`}
+                                    >
+                                      <span className="truncate">{f.name}</span>
+                                      {isCurrent && <Check className="w-3 h-3 text-[#6355C7] dark:text-[#A79AF3] shrink-0" />}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+
                             <div className="border-t my-1 border-neutral-200 dark:border-neutral-700" />
                             <button
                               onClick={(e) => {
@@ -634,7 +695,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 <div className="col-span-2 py-16 text-center text-neutral-400">
                   <p className="text-sm">Нет тетрадей в этой категории.</p>
                   <button
-                    onClick={onQuickCreateNotebook}
+                    onClick={handleCreateNotebookInCurrentFolder}
                     className="mt-3 text-xs text-[#6355C7] hover:underline font-medium"
                   >
                     + Создать новую тетрадь

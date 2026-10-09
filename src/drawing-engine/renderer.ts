@@ -5,6 +5,9 @@ import { getResolvedImageUrl } from '../sync/imageStorage';
 const imageCache = new Map<string, HTMLImageElement>();
 let globalImageLoadCallback: (() => void) | null = null;
 
+// Offscreen canvas cache for rendered paper backgrounds (grid, ruled, dots, paper color)
+const bgCanvasCache = new Map<string, HTMLCanvasElement>();
+
 export function setGlobalImageLoadCallback(callback: (() => void) | null) {
   globalImageLoadCallback = callback;
 }
@@ -57,6 +60,44 @@ export function renderBackground(
   _bounds?: { minX: number; minY: number; maxX: number; maxY: number },
   pageOrderOrIndex: number = 0
 ) {
+  // Use cached offscreen canvas when available for smooth 60fps/120fps hardware-accelerated rendering
+  const cacheKey = `${width}_${height}_${bg.color}_${bg.type}_${bg.gridSize || 25}_${bg.gridColor || ''}_${pageOrderOrIndex % 2}`;
+  const cached = bgCanvasCache.get(cacheKey);
+  if (cached) {
+    ctx.drawImage(cached, 0, 0);
+    return;
+  }
+
+  // Create offscreen canvas to cache the background
+  const offCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  const targetCtx = offCanvas ? offCanvas.getContext('2d') : null;
+
+  if (offCanvas && targetCtx) {
+    offCanvas.width = width;
+    offCanvas.height = height;
+    drawBackgroundToContext(targetCtx, width, height, bg, pageOrderOrIndex);
+    
+    // Store in cache (limit cache to 20 entries to prevent memory buildup)
+    if (bgCanvasCache.size > 20) {
+      const firstKey = bgCanvasCache.keys().next().value;
+      if (firstKey) bgCanvasCache.delete(firstKey);
+    }
+    bgCanvasCache.set(cacheKey, offCanvas);
+    ctx.drawImage(offCanvas, 0, 0);
+    return;
+  }
+
+  // Fallback to direct rendering if offscreen canvas cannot be created
+  drawBackgroundToContext(ctx, width, height, bg, pageOrderOrIndex);
+}
+
+function drawBackgroundToContext(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  bg: PageBackground,
+  pageOrderOrIndex: number
+) {
   const x0 = 0;
   const y0 = 0;
   const x1 = width;
@@ -78,16 +119,13 @@ export function renderBackground(
 
   const darkPaper = isColorDark(bg.color);
 
-  // Soft, eye-friendly grid colors:
-  // On dark/midnight paper: soft, pleasant, non-glaring muted light tone (calm slate-white)
-  // that is clearly visible but DOES NOT cut the eyes!
-  // On light paper: soft notebook blue or graphite.
+  // Soft, eye-friendly grid colors
   let lineColor: string;
   let lineAlpha: number;
 
   if (darkPaper) {
     lineColor = '#CBD5E1';
-    lineAlpha = 0.22; // Soft, calm, comfortable on dark paper — does NOT glare or cut the eyes!
+    lineAlpha = 0.22;
   } else {
     if (!bg.gridColor || bg.gridColor === '#E2E8F0' || bg.gridColor === '#CBD5E1' || bg.gridColor === '#FFFFFF') {
       lineColor = '#3B82F6'; // School notebook blue
@@ -128,8 +166,6 @@ export function renderBackground(
     ctx.stroke();
 
     // Alternating red vertical margin line:
-    // Odd pages (1, 3, 5... -> order 0, 2, 4): margin on the RIGHT
-    // Even pages (2, 4, 6... -> order 1, 3, 5): margin on the LEFT
     const marginSpan = Math.min(110, Math.max(75, width * 0.12));
     const isOddPage = (pageOrderOrIndex % 2 === 0);
     const marginX = (isOddPage ? (width - marginSpan) : marginSpan) + offset;
