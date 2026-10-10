@@ -219,7 +219,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
 
             <button
               onClick={onUndo}
-              disabled={historyIndex <= 0}
+              disabled={historyIndex <= 0 && !(currentPage.images?.some((i) => !i.deleted) || currentPage.texts?.some((t) => !t.deleted) || currentPage.strokes?.some((s) => !s.deleted) || currentPage.shapes?.some((sh) => !sh.deleted))}
               className={`w-10 h-10 rounded-full border shadow-xs flex items-center justify-center transition-all active:scale-95 cursor-pointer disabled:opacity-30 ${
                 isDark 
                   ? 'bg-[#181928] border-neutral-700 text-neutral-200' 
@@ -360,8 +360,8 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
       {/* 4. TEXT EDITING FLOATING BAR (When typing text on mobile) */}
       {editingText && (
         <div className="pb-safe px-3 mb-3 pointer-events-auto flex justify-center animate-in fade-in slide-in-from-bottom-2 duration-150">
-          <div className={`w-full max-w-md rounded-2xl border shadow-xl p-2 flex items-center justify-between gap-2 backdrop-blur-xl ${
-            isDark ? 'bg-[#181928]/95 border-neutral-700 text-white' : 'bg-white/95 border-[#E2E4EC] text-neutral-900'
+          <div className={`w-full max-w-md rounded-2xl border shadow-xl p-2 flex items-center justify-between gap-2 ${
+            isDark ? 'bg-[#181928] border-neutral-700 text-white' : 'bg-white border-[#E2E4EC] text-neutral-900'
           }`}>
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-xl bg-[#EDE9FE] dark:bg-[#2A234B] text-[#6355C7] dark:text-[#A79AF3] flex items-center justify-center font-bold">
@@ -442,8 +442,8 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
           )}
 
           {/* The Dock Card */}
-          <div className={`rounded-3xl border shadow-xl backdrop-blur-xl p-1.5 transition-all ${
-            isDark ? 'bg-[#181928]/95 border-neutral-700/80 text-white' : 'bg-white/95 border-[#E2E4EC] text-neutral-800'
+          <div className={`rounded-3xl border shadow-xl p-1.5 transition-all ${
+            isDark ? 'bg-[#181928] border-neutral-700/80 text-white' : 'bg-white border-[#E2E4EC] text-neutral-800'
           } ${
             isLandscapeScreen ? 'flex flex-col gap-1.5 w-16 items-center py-2' : 'w-full max-w-sm flex items-center justify-between'
           }`}>
@@ -524,7 +524,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
               <span className="text-[10px] leading-tight">Рука</span>
             </button>
 
-            {/* 5. Ещё */}
+            {/* 5. Ещё / Выбор */}
             <button
               onClick={() => setIsMoreMenuOpen(true)}
               className={`flex flex-col items-center justify-center rounded-2xl transition-all cursor-pointer ${
@@ -534,10 +534,19 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
                   ? 'bg-[#6355C7] text-white font-bold shadow-sm'
                   : isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-600'
               }`}
-              title="Ещё инструменты"
+              title={activeTool === 'select' ? 'Выделение активно' : 'Ещё инструменты'}
             >
-              <MoreHorizontal className="w-4 h-4 mb-0.5" />
-              <span className="text-[10px] leading-tight">Ещё</span>
+              {activeTool === 'select' ? (
+                <>
+                  <MousePointer className="w-4 h-4 mb-0.5 text-white" />
+                  <span className="text-[10px] leading-tight font-bold text-white">Выбор</span>
+                </>
+              ) : (
+                <>
+                  <MoreHorizontal className="w-4 h-4 mb-0.5" />
+                  <span className="text-[10px] leading-tight">Ещё</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -550,7 +559,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
             ? 'absolute right-4 top-16 bottom-4 w-80' 
             : 'px-3 mb-2 w-full flex justify-center'
         }`}>
-          <div className={`w-full max-w-md rounded-3xl border shadow-2xl p-4 flex flex-col gap-3.5 backdrop-blur-2xl ${
+          <div className={`w-full max-w-md rounded-3xl border shadow-2xl p-4 flex flex-col gap-3.5 ${
             isDark ? 'bg-[#181928] border-neutral-700 text-white' : 'bg-white border-[#E2E4EC] text-neutral-900'
           }`}>
             {/* Header Tabs: [ Перо ] [ Лист ] and [ ✕ ] */}
@@ -790,11 +799,11 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
       {isMoreMenuOpen && (
         <div 
           onClick={() => setIsMoreMenuOpen(false)}
-          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 pointer-events-auto flex items-end sm:items-center justify-center p-3 animate-in fade-in duration-150"
+          className="fixed inset-0 bg-black/50 z-50 pointer-events-auto flex items-end sm:items-center justify-center p-3 animate-in fade-in duration-150"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-sm rounded-3xl border shadow-2xl p-4 flex flex-col gap-3 backdrop-blur-2xl ${
+            className={`w-full max-w-sm rounded-3xl border shadow-2xl p-4 flex flex-col gap-3 ${
               isDark ? 'bg-[#181928] border-neutral-700 text-white' : 'bg-white border-[#E2E4EC] text-neutral-900'
             }`}
           >
@@ -910,11 +919,11 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
       {isPagesDrawerOpen && (
         <div
           onClick={() => setIsPagesDrawerOpen(false)}
-          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 pointer-events-auto flex justify-start animate-in fade-in duration-150"
+          className="fixed inset-0 bg-black/50 z-50 pointer-events-auto flex justify-start animate-in fade-in duration-150"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className={`w-72 max-w-[85vw] h-full p-4 flex flex-col justify-between border-r shadow-2xl backdrop-blur-2xl ${
+            className={`w-72 max-w-[85vw] h-full p-4 flex flex-col justify-between border-r shadow-2xl ${
               isDark ? 'bg-[#12131F] border-neutral-800 text-white' : 'bg-white border-[#E2E4EC] text-neutral-900'
             }`}
           >

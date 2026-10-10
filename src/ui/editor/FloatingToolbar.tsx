@@ -20,6 +20,7 @@ interface FloatingToolbarProps {
   eraserRadius: number;
   historyIndex: number;
   historyLength: number;
+  hasActiveContent?: boolean;
   theme: 'light' | 'dark';
   onSelectTool: (tool: ToolType) => void;
   onToggleToolOptions: () => void;
@@ -37,6 +38,7 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
   eraserRadius,
   historyIndex,
   historyLength,
+  hasActiveContent = false,
   theme,
   onSelectTool,
   onToggleToolOptions,
@@ -68,10 +70,10 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
         /* Subtle, very pleasant expand button without text */
         <button
           onClick={() => setIsCollapsed(false)}
-          className={`px-4 py-1.5 rounded-full border shadow-md backdrop-blur-md flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+          className={`px-4 py-1.5 rounded-full border shadow-md flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer ${
             isDark
-              ? 'bg-[#161726]/90 border-neutral-700/80 text-neutral-300 hover:text-white hover:bg-[#202237]'
-              : 'bg-white/95 border-[#E2E4EC] text-neutral-600 hover:text-[#6355C7] hover:bg-white shadow-sm'
+              ? 'bg-[#161726] border-neutral-700/80 text-neutral-300 hover:text-white hover:bg-[#202237]'
+              : 'bg-white border-[#E2E4EC] text-neutral-600 hover:text-[#6355C7] hover:bg-white shadow-sm'
           }`}
           title="Панель инструментов"
         >
@@ -116,7 +118,7 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
           {/* Undo & Redo buttons */}
           <button
             onClick={onUndo}
-            disabled={historyIndex <= 0}
+            disabled={historyIndex <= 0 && !hasActiveContent}
             className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-800 dark:hover:text-white disabled:opacity-20 cursor-pointer"
             title="Отменить (Ctrl+Z)"
           >

@@ -552,12 +552,11 @@ function isImageInViewport(
   img: ImageObject,
   vb: { minX: number; minY: number; maxX: number; maxY: number }
 ): boolean {
-  return !(
-    img.x + img.width < vb.minX ||
-    img.x > vb.maxX ||
-    img.y + img.height < vb.minY ||
-    img.y > vb.maxY
-  );
+  const minX = Math.min(img.x, img.x + img.width);
+  const maxX = Math.max(img.x, img.x + img.width);
+  const minY = Math.min(img.y, img.y + img.height);
+  const maxY = Math.max(img.y, img.y + img.height);
+  return !(maxX < vb.minX || minX > vb.maxX || maxY < vb.minY || minY > vb.maxY);
 }
 
 export function renderPage(
@@ -569,9 +568,16 @@ export function renderPage(
     eraserPreview?: { x: number; y: number; radius: number } | null;
     pressureEnabled?: boolean;
     viewportBounds?: { minX: number; minY: number; maxX: number; maxY: number };
+    excludeIds?: {
+      strokeIds?: string[];
+      shapeIds?: string[];
+      textIds?: string[];
+      imageIds?: string[];
+    };
   }
 ) {
   const vb = options?.viewportBounds;
+  const exclude = options?.excludeIds;
 
   // 1. Background (fills entire screen seamlessly if viewportBounds provided)
   renderBackground(ctx, page.width, page.height, page.background, options?.viewportBounds, page.order ?? 0);
@@ -579,6 +585,7 @@ export function renderPage(
   // 2. Images (rendered underneath annotations)
   if (page.images) {
     for (const img of page.images) {
+      if (exclude?.imageIds?.includes(img.id)) continue;
       if (!img.deleted && (!vb || isImageInViewport(img, vb))) {
         renderImage(ctx, img);
       }
@@ -588,6 +595,7 @@ export function renderPage(
   // 3. Shapes
   if (page.shapes) {
     for (const shape of page.shapes) {
+      if (exclude?.shapeIds?.includes(shape.id)) continue;
       if (!shape.deleted && (!vb || isShapeInViewport(shape, vb))) {
         renderShape(ctx, shape);
       }
@@ -597,6 +605,7 @@ export function renderPage(
   // 4. Texts
   if (page.texts) {
     for (const text of page.texts) {
+      if (exclude?.textIds?.includes(text.id)) continue;
       if (!text.deleted && (!vb || isTextInViewport(text, vb))) {
         renderText(ctx, text);
       }
@@ -606,7 +615,7 @@ export function renderPage(
   // 5. Strokes (markers first, then pens/pencils for crisp layering with viewport culling)
   if (page.strokes) {
     const activeStrokes = page.strokes.filter(
-      (s) => !s.deleted && (!vb || isStrokeInViewport(s, vb))
+      (s) => !s.deleted && (!exclude?.strokeIds?.includes(s.id)) && (!vb || isStrokeInViewport(s, vb))
     );
     const markers = activeStrokes.filter((s) => s.tool === 'marker');
     const others = activeStrokes.filter((s) => s.tool !== 'marker');

@@ -133,7 +133,58 @@ export function getShapeBounds(shape: Shape): { x: number; y: number; width: num
  * Checks if a point is inside a rectangle
  */
 export function pointInRect(p: Point, rect: { x: number; y: number; width: number; height: number }): boolean {
-  return p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height;
+  const minX = Math.min(rect.x, rect.x + rect.width);
+  const maxX = Math.max(rect.x, rect.x + rect.width);
+  const minY = Math.min(rect.y, rect.y + rect.height);
+  const maxY = Math.max(rect.y, rect.y + rect.height);
+  return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+}
+
+/**
+ * Checks if two axis-aligned rectangles intersect or touch
+ */
+export function rectIntersectsRect(
+  r1: { x: number; y: number; width: number; height: number },
+  r2: { x: number; y: number; width: number; height: number }
+): boolean {
+  const r1Right = r1.x + r1.width;
+  const r1Bottom = r1.y + r1.height;
+  const r2Right = r2.x + r2.width;
+  const r2Bottom = r2.y + r2.height;
+
+  const minX1 = Math.min(r1.x, r1Right);
+  const maxX1 = Math.max(r1.x, r1Right);
+  const minY1 = Math.min(r1.y, r1Bottom);
+  const maxY1 = Math.max(r1.y, r1Bottom);
+
+  const minX2 = Math.min(r2.x, r2Right);
+  const maxX2 = Math.max(r2.x, r2Right);
+  const minY2 = Math.min(r2.y, r2Bottom);
+  const maxY2 = Math.max(r2.y, r2Bottom);
+  return minX1 <= maxX2 && maxX1 >= minX2 && minY1 <= maxY2 && maxY1 >= minY2;
+}
+
+export function isPointInImage(
+  p: Point,
+  img: { x: number; y: number; width: number; height: number },
+  tolerance = 12
+): boolean {
+  const minX = Math.min(img.x, img.x + img.width) - tolerance;
+  const maxX = Math.max(img.x, img.x + img.width) + tolerance;
+  const minY = Math.min(img.y, img.y + img.height) - tolerance;
+  const maxY = Math.max(img.y, img.y + img.height) + tolerance;
+  return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+}
+
+export function getImageBounds(
+  img: { x: number; y: number; width: number; height: number },
+  pad = 0
+): { x: number; y: number; width: number; height: number } {
+  const x = Math.min(img.x, img.x + img.width) - pad;
+  const y = Math.min(img.y, img.y + img.height) - pad;
+  const width = Math.abs(img.width) + pad * 2;
+  const height = Math.abs(img.height) + pad * 2;
+  return { x, y, width, height };
 }
 
 /**
@@ -142,26 +193,19 @@ export function pointInRect(p: Point, rect: { x: number; y: number; width: numbe
 export function smoothPoints(points: Point[]): Point[] {
   if (points.length < 3) return points;
 
-  // Single pass of Chaikin corner-cutting creates organic, smooth calligraphy without wobble or overshoot
+  // Single in-place lightweight smoothing without inflating point count
   const smoothed: Point[] = [points[0]];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[i];
-    const p1 = points[i + 1];
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const next = points[i + 1];
 
-    const q: Point = {
-      x: 0.75 * p0.x + 0.25 * p1.x,
-      y: 0.75 * p0.y + 0.25 * p1.y,
-      pressure: (p0.pressure ?? 0.5) * 0.75 + (p1.pressure ?? 0.5) * 0.25,
-      time: p0.time,
-    };
-    const r: Point = {
-      x: 0.25 * p0.x + 0.75 * p1.x,
-      y: 0.25 * p0.y + 0.75 * p1.y,
-      pressure: (p0.pressure ?? 0.5) * 0.25 + (p1.pressure ?? 0.5) * 0.75,
-      time: p1.time,
-    };
-
-    smoothed.push(q, r);
+    smoothed.push({
+      x: 0.25 * prev.x + 0.5 * curr.x + 0.25 * next.x,
+      y: 0.25 * prev.y + 0.5 * curr.y + 0.25 * next.y,
+      pressure: curr.pressure,
+      time: curr.time,
+    });
   }
   smoothed.push(points[points.length - 1]);
   return smoothed;
