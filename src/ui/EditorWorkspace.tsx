@@ -51,29 +51,9 @@ import {
   HistoryEntry, 
   SelectionBox 
 } from '../types';
-import { 
-  renderPage, 
-  isColorDark, 
-  renderShape, 
-  renderStroke, 
-  renderImage, 
-  renderText, 
-  renderSelectionBox, 
-  setGlobalImageLoadCallback 
-} from '../drawing-engine/renderer';
+import { renderPage, isColorDark, renderShape, setGlobalImageLoadCallback } from '../drawing-engine/renderer';
 import { preparePageImages, subscribeImageResolved } from '../sync/imageStorage';
-import { 
-  strokeIntersectsCircle, 
-  sliceStrokeByEraser, 
-  pointInRect, 
-  rectIntersectsRect, 
-  smoothPoints, 
-  getStrokeBounds, 
-  getShapeBounds, 
-  distance,
-  isPointInImage,
-  getImageBounds
-} from '../drawing-engine/math';
+import { strokeIntersectsCircle, sliceStrokeByEraser, pointInRect, smoothPoints, getStrokeBounds, getShapeBounds, distance } from '../drawing-engine/math';
 import { exportNotebookToPdf, exportPageAsImage, exportToNotoFile } from '../export/exporter';
 import { NotoIcon } from './NotoLogo';
 import { EditorHeader } from './editor/EditorHeader';
@@ -275,27 +255,19 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     initialStrokes: Stroke[];
     initialShapes: Shape[];
     initialTexts: TextObject[];
-    initialImages: ImageObject[];
-    liveBox: SelectionBox;
-    liveStrokes: Stroke[];
-    liveShapes: Shape[];
-    liveTexts: TextObject[];
-    liveImages: ImageObject[];
   }
 
   const [selectedIds, setSelectedIds] = useState<{
     strokeIds: string[];
     shapeIds: string[];
     textIds: string[];
-    imageIds: string[];
-  }>({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+  }>({ strokeIds: [], shapeIds: [], textIds: [] });
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
-  const selectionBoxRef = useRef<SelectionBox | null>(null);
   const [isSelectionColorPickerOpen, setIsSelectionColorPickerOpen] = useState(false);
   const [selectionCursor, setSelectionCursor] = useState<string>('crosshair');
   const selectionTransformRef = useRef<SelectionTransformState | null>(null);
 
-  const getSelectionHitHandle = (pt: Point, sel: SelectionBox, tolerance: number = 16): SelectionHandle => {
+  const getSelectionHitHandle = (pt: Point, sel: SelectionBox, tolerance: number = 14): SelectionHandle => {
     if (!sel || sel.width <= 0 || sel.height <= 0) return null;
     const nw = { x: sel.x, y: sel.y };
     const ne = { x: sel.x + sel.width, y: sel.y };
@@ -316,10 +288,9 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     sIds: string[],
     shIds: string[],
     tIds: string[],
-    imgIds: string[],
     page: Page
   ): SelectionBox | null => {
-    if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0 && imgIds.length === 0) return null;
+    if (sIds.length === 0 && shIds.length === 0 && tIds.length === 0) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
     const selStrokes = (page.strokes || []).filter((s) => !s.deleted && sIds.includes(s.id));
@@ -352,16 +323,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       maxY = Math.max(maxY, t.y + h);
     });
 
-    const selImages = (page.images || []).filter((img) => !img.deleted && imgIds.includes(img.id));
-    selImages.forEach((img) => {
-      const x2 = img.x + img.width;
-      const y2 = img.y + img.height;
-      minX = Math.min(minX, Math.min(img.x, x2));
-      minY = Math.min(minY, Math.min(img.y, y2));
-      maxX = Math.max(maxX, Math.max(img.x, x2));
-      maxY = Math.max(maxY, Math.max(img.y, y2));
-    });
-
     if (minX === Infinity || maxX === -Infinity) return null;
 
     const pad = 10;
@@ -373,7 +334,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       strokeIds: sIds,
       shapeIds: shIds,
       textIds: tIds,
-      imageIds: imgIds,
+      imageIds: [],
     };
   };
 
@@ -517,19 +478,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     const lCtx = layer.getContext('2d');
     if (!lCtx) return;
     lCtx.clearRect(0, 0, layer.width, layer.height);
-    const excludeIds = selectionTransformRef.current ? {
-      strokeIds: selectedIds.strokeIds,
-      shapeIds: selectedIds.shapeIds,
-      textIds: selectedIds.textIds,
-      imageIds: selectedIds.imageIds,
-    } : undefined;
-
     renderPage(lCtx, currentPage, {
       pressureEnabled: false,
-      excludeIds,
     });
     isPageLayerDirtyRef.current = false;
-  }, [currentPage, selectedIds]);
+  }, [currentPage]);
 
   // Master Canvas Repainting (Broad notebook page with clear boundaries and studio desk contrast)
   const repaintCanvas = useCallback(() => {
@@ -602,41 +555,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       ctx.drawImage(pageLayerCanvasRef.current, 0, 0);
     }
 
-    // 6. If actively transforming selection, render the live items smoothly on top with 0 lag
-    if (selectionTransformRef.current) {
-      const { liveImages, liveShapes, liveTexts, liveStrokes, liveBox } = selectionTransformRef.current;
-      if (liveImages) {
-        for (const img of liveImages) {
-          renderImage(ctx, img);
-        }
-      }
-      if (liveShapes) {
-        for (const sh of liveShapes) {
-          renderShape(ctx, sh);
-        }
-      }
-      if (liveTexts) {
-        for (const txt of liveTexts) {
-          renderText(ctx, txt);
-        }
-      }
-      if (liveStrokes) {
-        for (const s of liveStrokes) {
-          renderStroke(ctx, s, false);
-        }
-      }
-      if (liveBox) {
-        renderSelectionBox(ctx, liveBox);
-      }
-    } else {
-      // Normal selection box or live marquee drag
-      const curBox = selectionBoxRef.current || selectionBox;
-      if (curBox) {
-        renderSelectionBox(ctx, curBox);
-      }
-    }
-
-    // 7. Render active in-progress stroke directly on top
+    // 6. Render active in-progress stroke directly on top
     if (activeStrokeRef.current) {
       renderStroke(ctx, activeStrokeRef.current, false);
     }
@@ -648,6 +567,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         ...s,
         opacity: 0.9,
       });
+    }
+
+    // Active selection box
+    if (selectionBox) {
+      renderSelectionBox(ctx, selectionBox);
     }
 
     // Eraser circle indicator
@@ -901,10 +825,8 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       texts: (page.texts || []).map((t) => ({ ...t, deleted: true, updatedAt: now })),
       images: (page.images || []).map((img) => ({ ...img, deleted: true, updatedAt: now })),
     }), 'Очистить лист');
-    setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+    setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
     setSelectionBox(null);
-    selectionBoxRef.current = null;
-    isPageLayerDirtyRef.current = true;
   };
 
   const handleSetPaperType = (newType: GridType) => {
@@ -959,23 +881,20 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
   // Selection actions: Delete, Duplicate, Recolor
   const handleDeleteSelected = () => {
-    if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0 && selectedIds.imageIds.length === 0) return;
+    if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0) return;
     const now = Date.now();
     updateCurrentPage((page) => ({
       ...page,
       strokes: (page.strokes || []).map((s) => selectedIds.strokeIds.includes(s.id) ? { ...s, deleted: true, updatedAt: now } : s),
       shapes: (page.shapes || []).map((sh) => selectedIds.shapeIds.includes(sh.id) ? { ...sh, deleted: true, updatedAt: now } : sh),
       texts: (page.texts || []).map((t) => selectedIds.textIds.includes(t.id) ? { ...t, deleted: true, updatedAt: now } : t),
-      images: (page.images || []).map((img) => selectedIds.imageIds.includes(img.id) ? { ...img, deleted: true, updatedAt: now } : img),
     }), 'Удалить выделенное');
-    setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+    setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
     setSelectionBox(null);
-    selectionBoxRef.current = null;
-    isPageLayerDirtyRef.current = true;
   };
 
   const handleDuplicateSelected = () => {
-    if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0 && selectedIds.imageIds.length === 0) return;
+    if (selectedIds.strokeIds.length === 0 && selectedIds.shapeIds.length === 0 && selectedIds.textIds.length === 0) return;
     const offset = 30;
     const now = Date.now();
     const newStrokes = (currentPage.strokes || [])
@@ -989,12 +908,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         deleted: false,
       }));
     const newShapes = (currentPage.shapes || [])
-      .filter((sh) => !sh.deleted && selectedIds.shapeIds.includes(sh.id))
-      .map((sh) => ({
-        ...sh,
+      .filter((s) => !s.deleted && selectedIds.shapeIds.includes(s.id))
+      .map((s) => ({
+        ...s,
         id: `shape_${now}_${Math.random().toString(36).substr(2, 5)}`,
-        x: sh.x + offset,
-        y: sh.y + offset,
+        x: s.x + offset,
+        y: s.y + offset,
         createdAt: now,
         updatedAt: now,
         deleted: false,
@@ -1010,52 +929,22 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         updatedAt: now,
         deleted: false,
       }));
-    const newImages = (currentPage.images || [])
-      .filter((img) => !img.deleted && selectedIds.imageIds.includes(img.id))
-      .map((img) => ({
-        ...img,
-        id: `img_${now}_${Math.random().toString(36).substr(2, 5)}`,
-        x: img.x + offset,
-        y: img.y + offset,
-        createdAt: now,
-        updatedAt: now,
-        deleted: false,
-      }));
-
-    const newStrokeIds = newStrokes.map((s) => s.id);
-    const newShapeIds = newShapes.map((sh) => sh.id);
-    const newTextIds = newTexts.map((t) => t.id);
-    const newImageIds = newImages.map((img) => img.id);
 
     updateCurrentPage((page) => ({
       ...page,
       strokes: [...(page.strokes || []), ...newStrokes],
       shapes: [...(page.shapes || []), ...newShapes],
       texts: [...(page.texts || []), ...newTexts],
-      images: [...(page.images || []), ...newImages],
     }), 'Дублировать выделенное');
 
+    // Deselect after copying so the selection clears automatically
+    setSelectionBox(null);
     setSelectedIds({
-      strokeIds: newStrokeIds,
-      shapeIds: newShapeIds,
-      textIds: newTextIds,
-      imageIds: newImageIds,
+      strokeIds: [],
+      shapeIds: [],
+      textIds: [],
     });
-
-    if (selectionBox) {
-      const dupBox: SelectionBox = {
-        ...selectionBox,
-        x: selectionBox.x + offset,
-        y: selectionBox.y + offset,
-        strokeIds: newStrokeIds,
-        shapeIds: newShapeIds,
-        textIds: newTextIds,
-        imageIds: newImageIds,
-      };
-      setSelectionBox(dupBox);
-      selectionBoxRef.current = dupBox;
-    }
-    isPageLayerDirtyRef.current = true;
+    setIsSelectionColorPickerOpen(false);
   };
 
   const handleRecolorSelected = (colorToApply?: string) => {
@@ -1091,10 +980,8 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       strokeIds: sIds,
       shapeIds: shIds,
       textIds: tIds,
-      imageIds: selectedIds.imageIds,
     });
     setStrokeColor(c);
-    isPageLayerDirtyRef.current = true;
   };
 
   // Pointer Down
@@ -1142,7 +1029,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     startPointRef.current = pt;
 
     // Selection move or corner resize handling
-    if (activeTool === 'select' && selectionBox && (selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0 || selectedIds.imageIds.length > 0)) {
+    if (activeTool === 'select' && selectionBox && (selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0)) {
       const hitTolerance = Math.max(12, 16 / scale);
       const handle = getSelectionHitHandle(pt, selectionBox, hitTolerance);
 
@@ -1157,9 +1044,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         const initialTexts = (currentPage.texts || [])
           .filter((t) => !t.deleted && selectedIds.textIds.includes(t.id))
           .map((t) => ({ ...t }));
-        const initialImages = (currentPage.images || [])
-          .filter((img) => !img.deleted && selectedIds.imageIds.includes(img.id))
-          .map((img) => ({ ...img }));
 
         selectionTransformRef.current = {
           handle,
@@ -1168,7 +1052,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           initialStrokes,
           initialShapes,
           initialTexts,
-          initialImages,
         };
         return;
       }
@@ -1217,7 +1100,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         italic: false,
       });
     } else if (activeTool === 'select') {
-      setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+      setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
       setSelectionBox({
         x: pt.x,
         y: pt.y,
@@ -1265,37 +1148,39 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
     // 1. Transforming selection (Moving via center or Resizing via corner handles)
     if (selectionTransformRef.current) {
-      const { handle, startPt, initialBox, initialStrokes, initialShapes, initialTexts, initialImages } = selectionTransformRef.current;
+      const { handle, startPt, initialBox, initialStrokes, initialShapes, initialTexts } = selectionTransformRef.current;
 
       if (handle === 'inside') {
         // Move / Перенос
         const dx = pt.x - startPt.x;
         const dy = pt.y - startPt.y;
-        const newBox: SelectionBox = {
-          ...initialBox,
-          x: initialBox.x + dx,
-          y: initialBox.y + dy,
-        };
+        const newBox = { ...initialBox, x: initialBox.x + dx, y: initialBox.y + dy };
+        setSelectionBox(newBox);
 
-        selectionTransformRef.current.liveBox = newBox;
-        selectionTransformRef.current.liveStrokes = initialStrokes.map((s) => ({
-          ...s,
-          points: s.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
-        }));
-        selectionTransformRef.current.liveShapes = initialShapes.map((sh) => ({
-          ...sh,
-          x: sh.x + dx,
-          y: sh.y + dy,
-        }));
-        selectionTransformRef.current.liveTexts = initialTexts.map((t) => ({
-          ...t,
-          x: t.x + dx,
-          y: t.y + dy,
-        }));
-        selectionTransformRef.current.liveImages = initialImages.map((img) => ({
-          ...img,
-          x: img.x + dx,
-          y: img.y + dy,
+        const selStrokeMap = new Map(initialStrokes.map((s) => [s.id, s]));
+        const selShapeMap = new Map(initialShapes.map((sh) => [sh.id, sh]));
+        const selTextMap = new Map(initialTexts.map((t) => [t.id, t]));
+
+        updateCurrentPage((page) => ({
+          ...page,
+          strokes: (page.strokes || []).map((s) => {
+            const orig = selStrokeMap.get(s.id);
+            if (!orig) return s;
+            return {
+              ...s,
+              points: orig.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
+            };
+          }),
+          shapes: (page.shapes || []).map((sh) => {
+            const orig = selShapeMap.get(sh.id);
+            if (!orig) return sh;
+            return { ...sh, x: orig.x + dx, y: orig.y + dy };
+          }),
+          texts: (page.texts || []).map((t) => {
+            const orig = selTextMap.get(t.id);
+            if (!orig) return t;
+            return { ...t, x: orig.x + dx, y: orig.y + dy };
+          }),
         }));
         return;
       } else {
@@ -1334,46 +1219,52 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         const scaleX = initialBox.width > 0 ? newW / initialBox.width : 1;
         const scaleY = initialBox.height > 0 ? newH / initialBox.height : 1;
         const uniformScale = Math.sqrt(Math.abs(scaleX * scaleY));
-        const newBox: SelectionBox = {
-          ...initialBox,
-          x: newX,
-          y: newY,
-          width: newW,
-          height: newH,
-        };
 
-        selectionTransformRef.current.liveBox = newBox;
-        selectionTransformRef.current.liveStrokes = initialStrokes.map((s) => ({
-          ...s,
-          width: Math.max(1, s.width * uniformScale),
-          points: s.points.map((p) => ({
-            ...p,
-            x: newX + (p.x - initialBox.x) * scaleX,
-            y: newY + (p.y - initialBox.y) * scaleY,
-          })),
-        }));
-        selectionTransformRef.current.liveShapes = initialShapes.map((sh) => ({
-          ...sh,
-          x: newX + (sh.x - initialBox.x) * scaleX,
-          y: newY + (sh.y - initialBox.y) * scaleY,
-          width: sh.width * scaleX,
-          height: sh.height * scaleY,
-          strokeWidth: Math.max(1, sh.strokeWidth * uniformScale),
-        }));
-        selectionTransformRef.current.liveTexts = initialTexts.map((t) => ({
-          ...t,
-          x: newX + (t.x - initialBox.x) * scaleX,
-          y: newY + (t.y - initialBox.y) * scaleY,
-          fontSize: Math.max(8, Math.round(t.fontSize * uniformScale)),
-          width: t.width ? t.width * scaleX : t.width,
-          height: t.height ? t.height * scaleY : t.height,
-        }));
-        selectionTransformRef.current.liveImages = initialImages.map((img) => ({
-          ...img,
-          x: newX + (img.x - initialBox.x) * scaleX,
-          y: newY + (img.y - initialBox.y) * scaleY,
-          width: img.width * scaleX,
-          height: img.height * scaleY,
+        setSelectionBox({ ...initialBox, x: newX, y: newY, width: newW, height: newH });
+
+        const selStrokeMap = new Map(initialStrokes.map((s) => [s.id, s]));
+        const selShapeMap = new Map(initialShapes.map((sh) => [sh.id, sh]));
+        const selTextMap = new Map(initialTexts.map((t) => [t.id, t]));
+
+        updateCurrentPage((page) => ({
+          ...page,
+          strokes: (page.strokes || []).map((s) => {
+            const orig = selStrokeMap.get(s.id);
+            if (!orig) return s;
+            return {
+              ...s,
+              width: Math.max(1, orig.width * uniformScale),
+              points: orig.points.map((p) => ({
+                ...p,
+                x: newX + (p.x - initialBox.x) * scaleX,
+                y: newY + (p.y - initialBox.y) * scaleY,
+              })),
+            };
+          }),
+          shapes: (page.shapes || []).map((sh) => {
+            const orig = selShapeMap.get(sh.id);
+            if (!orig) return sh;
+            return {
+              ...sh,
+              x: newX + (orig.x - initialBox.x) * scaleX,
+              y: newY + (orig.y - initialBox.y) * scaleY,
+              width: orig.width * scaleX,
+              height: orig.height * scaleY,
+              strokeWidth: Math.max(1, orig.strokeWidth * uniformScale),
+            };
+          }),
+          texts: (page.texts || []).map((t) => {
+            const orig = selTextMap.get(t.id);
+            if (!orig) return t;
+            return {
+              ...t,
+              x: newX + (orig.x - initialBox.x) * scaleX,
+              y: newY + (orig.y - initialBox.y) * scaleY,
+              fontSize: Math.max(8, Math.round(orig.fontSize * uniformScale)),
+              width: orig.width ? orig.width * scaleX : orig.width,
+              height: orig.height ? orig.height * scaleY : orig.height,
+            };
+          }),
         }));
         return;
       }
@@ -1525,38 +1416,17 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
 
     if (selectionTransformRef.current) {
-      const { handle, liveStrokes, liveShapes, liveTexts, liveImages, liveBox } = selectionTransformRef.current;
+      const handle = selectionTransformRef.current.handle;
       selectionTransformRef.current = null;
+      pushHistory(handle === 'inside' ? 'Переместить выделенное' : 'Масштабировать выделенное');
 
-      const selStrokeMap = new Map((liveStrokes || []).map((s) => [s.id, s]));
-      const selShapeMap = new Map((liveShapes || []).map((sh) => [sh.id, sh]));
-      const selTextMap = new Map((liveTexts || []).map((t) => [t.id, t]));
-      const selImageMap = new Map((liveImages || []).map((img) => [img.id, img]));
-
-      updateCurrentPage((page) => ({
-        ...page,
-        strokes: (page.strokes || []).map((s) => selStrokeMap.get(s.id) || s),
-        shapes: (page.shapes || []).map((sh) => selShapeMap.get(sh.id) || sh),
-        texts: (page.texts || []).map((t) => selTextMap.get(t.id) || t),
-        images: (page.images || []).map((img) => selImageMap.get(img.id) || img),
-      }), handle === 'inside' ? 'Переместить выделенное' : 'Масштабировать выделенное');
-
-      const nextTightBox = computeBoundingBoxForItems(
-        selectedIds.strokeIds,
-        selectedIds.shapeIds,
-        selectedIds.textIds,
-        selectedIds.imageIds,
-        {
-          ...currentPage,
-          strokes: (currentPage.strokes || []).map((s) => selStrokeMap.get(s.id) || s),
-          shapes: (currentPage.shapes || []).map((sh) => selShapeMap.get(sh.id) || sh),
-          texts: (currentPage.texts || []).map((t) => selTextMap.get(t.id) || t),
-          images: (currentPage.images || []).map((img) => selImageMap.get(img.id) || img),
+      // Update selection bounding box to snuggly fit transformed items
+      if (selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0) {
+        const tightBox = computeBoundingBoxForItems(selectedIds.strokeIds, selectedIds.shapeIds, selectedIds.textIds, currentPage);
+        if (tightBox) {
+          setSelectionBox(tightBox);
         }
-      ) || liveBox;
-
-      setSelectionBox(nextTightBox);
-      selectionBoxRef.current = nextTightBox;
+      }
       isPageLayerDirtyRef.current = true;
       stopInteractionLoop();
       return;
@@ -1587,114 +1457,40 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       activeShapeRef.current = null;
     }
 
-    if (activeTool === 'select') {
-      const sp = startPointRef.current;
-      const endPt = screenToPageCoord(e.clientX, e.clientY);
-      const dragDist = sp ? Math.hypot(endPt.x - sp.x, endPt.y - sp.y) : 0;
-      const isTinyClick = dragDist < 8;
-
-      let matchedStrokes: string[] = [];
-      let matchedShapes: string[] = [];
-      let matchedTexts: string[] = [];
-      let matchedImages: string[] = [];
-
-      if (isTinyClick) {
-        const clickPt = endPt;
-        // 1. Check topmost text
-        const hitText = [...(currentPage.texts || [])].reverse().find(
-          (t) => !t.deleted && pointInRect(clickPt, { x: t.x, y: t.y, width: t.width || 120, height: t.height || 40 })
-        );
-        if (hitText) {
-          matchedTexts = [hitText.id];
-        } else {
-          // 2. Check topmost stroke
-          const hitStroke = [...(currentPage.strokes || [])].reverse().find(
-            (s) => !s.deleted && strokeIntersectsCircle(s, clickPt, Math.max(14, s.width * 1.5))
-          );
-          if (hitStroke) {
-            matchedStrokes = [hitStroke.id];
-          } else {
-            // 3. Check topmost shape
-            const hitShape = [...(currentPage.shapes || [])].reverse().find(
-              (sh) => !sh.deleted && pointInRect(clickPt, {
-                x: Math.min(sh.x, sh.x + sh.width) - 8,
-                y: Math.min(sh.y, sh.y + sh.height) - 8,
-                width: Math.abs(sh.width) + 16,
-                height: Math.abs(sh.height) + 16,
-              })
-            );
-            if (hitShape) {
-              matchedShapes = [hitShape.id];
-            } else {
-              // 4. Check topmost image / photo
-              const hitImage = [...(currentPage.images || [])].reverse().find(
-                (img) => !img.deleted && isPointInImage(clickPt, img, 14)
-              );
-              if (hitImage) {
-                matchedImages = [hitImage.id];
-              }
-            }
-          }
-        }
-      } else if (sp) {
-        // Area / Marquee selection
-        const selRect = {
-          x: Math.min(sp.x, endPt.x),
-          y: Math.min(sp.y, endPt.y),
-          width: Math.abs(endPt.x - sp.x),
-          height: Math.abs(endPt.y - sp.y),
-        };
-
-        matchedStrokes = (currentPage.strokes || [])
-          .filter((s) => !s.deleted && (
-            s.points.some((p) => pointInRect(p, selRect)) ||
-            rectIntersectsRect(getStrokeBounds(s), selRect)
-          ))
-          .map((s) => s.id);
-
-        matchedShapes = (currentPage.shapes || [])
-          .filter((sh) => !sh.deleted && (
-            pointInRect({ x: sh.x, y: sh.y }, selRect) ||
-            pointInRect({ x: sh.x + sh.width, y: sh.y + sh.height }, selRect) ||
-            rectIntersectsRect(getShapeBounds(sh), selRect)
-          ))
-          .map((s) => s.id);
-
-        matchedTexts = (currentPage.texts || [])
-          .filter((t) => !t.deleted && (
-            pointInRect({ x: t.x, y: t.y }, selRect) ||
-            rectIntersectsRect({ x: t.x, y: t.y, width: t.width || 100, height: t.height || 35 }, selRect)
-          ))
-          .map((t) => t.id);
-
-        matchedImages = (currentPage.images || [])
-          .filter((img) => !img.deleted && (
-            pointInRect({ x: img.x, y: img.y }, selRect) ||
-            pointInRect({ x: img.x + img.width / 2, y: img.y + img.height / 2 }, selRect) ||
-            rectIntersectsRect(getImageBounds(img), selRect)
-          ))
-          .map((img) => img.id);
-      }
-
-      if (matchedStrokes.length === 0 && matchedShapes.length === 0 && matchedTexts.length === 0 && matchedImages.length === 0) {
+    if (activeTool === 'select' && selectionBox) {
+      if (selectionBox.width < 8 && selectionBox.height < 8) {
         setSelectionBox(null);
-        selectionBoxRef.current = null;
-        setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+        setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
         setIsSelectionColorPickerOpen(false);
       } else {
-        setSelectedIds({
-          strokeIds: matchedStrokes,
-          shapeIds: matchedShapes,
-          textIds: matchedTexts,
-          imageIds: matchedImages,
-        });
-        const tightBox = computeBoundingBoxForItems(matchedStrokes, matchedShapes, matchedTexts, matchedImages, currentPage);
-        setSelectionBox(tightBox);
-        selectionBoxRef.current = tightBox;
+        const selRect = selectionBox;
+        const matchedStrokes = (currentPage.strokes || [])
+          .filter((s) => !s.deleted && s.points.some((p) => pointInRect(p, selRect)))
+          .map((s) => s.id);
+        const matchedShapes = (currentPage.shapes || [])
+          .filter((s) => !s.deleted && pointInRect({ x: s.x, y: s.y }, selRect))
+          .map((s) => s.id);
+        const matchedTexts = (currentPage.texts || [])
+          .filter((t) => !t.deleted && pointInRect({ x: t.x, y: t.y }, selRect))
+          .map((t) => t.id);
+
+        if (matchedStrokes.length === 0 && matchedShapes.length === 0 && matchedTexts.length === 0) {
+          setSelectionBox(null);
+          setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
+          setIsSelectionColorPickerOpen(false);
+        } else {
+          setSelectedIds({
+            strokeIds: matchedStrokes,
+            shapeIds: matchedShapes,
+            textIds: matchedTexts,
+          });
+          const tightBox = computeBoundingBoxForItems(matchedStrokes, matchedShapes, matchedTexts, currentPage);
+          if (tightBox) {
+            setSelectionBox(tightBox);
+          }
+        }
       }
     }
-
-    startPointRef.current = null;
 
     // Stop interaction loop after state updates have committed
     stopInteractionLoop();
@@ -1958,27 +1754,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           ...page,
           images: [...(page.images || []), newImage],
         }), 'Add image');
-
-        setActiveTool('select');
-        setSelectedIds({
-          strokeIds: [],
-          shapeIds: [],
-          textIds: [],
-          imageIds: [newImage.id],
-        });
-        const imgBox: SelectionBox = {
-          x: Math.max(0, newImage.x - 10),
-          y: Math.max(0, newImage.y - 10),
-          width: newImage.width + 20,
-          height: newImage.height + 20,
-          strokeIds: [],
-          shapeIds: [],
-          textIds: [],
-          imageIds: [newImage.id],
-        };
-        setSelectionBox(imgBox);
-        selectionBoxRef.current = imgBox;
-        isPageLayerDirtyRef.current = true;
       };
       img.src = dataUrl;
     };
@@ -2058,16 +1833,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   };
 
   const currentRulingName = RULING_TYPES.find((r) => r.id === currentPage.background.type)?.name || 'Клетка';
-  const hasSelectedItems =
-    selectedIds.strokeIds.length > 0 ||
-    selectedIds.shapeIds.length > 0 ||
-    selectedIds.textIds.length > 0 ||
-    selectedIds.imageIds.length > 0;
-  const totalSelectedCount =
-    selectedIds.strokeIds.length +
-    selectedIds.shapeIds.length +
-    selectedIds.textIds.length +
-    selectedIds.imageIds.length;
+  const hasSelectedItems = selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0;
 
   return (
     <div className={`flex-1 flex flex-col overflow-hidden font-sans select-none relative w-full h-full transition-colors ${
@@ -2118,8 +1884,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
             setActiveTool(tool);
             if (tool !== 'select') {
               setSelectionBox(null);
-              selectionBoxRef.current = null;
-              setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+              setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
               setIsSelectionColorPickerOpen(false);
             }
           }}
@@ -2269,8 +2034,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                 setActiveTool(tool);
                 if (tool !== 'select') {
                   setSelectionBox(null);
-                  selectionBoxRef.current = null;
-                  setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+                  setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
                   setIsSelectionColorPickerOpen(false);
                 }
                 if (!isToolSidebarOpen) {
@@ -2341,18 +2105,18 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
               data-popover="true"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
-              className={`fixed sm:absolute z-50 border rounded-2xl shadow-2xl px-3 py-1.5 flex items-center gap-2 text-xs font-bold animate-in fade-in zoom-in-95 duration-100 ${
+              className={`absolute z-40 border rounded-2xl shadow-2xl px-3 py-1.5 flex items-center gap-2 text-xs font-bold animate-in fade-in zoom-in-95 duration-100 ${
                 isDark
                   ? 'bg-[#181922] border-neutral-700 text-white'
                   : 'bg-white border-neutral-200 text-neutral-900'
               }`}
               style={{
-                left: Math.max(12, Math.min(window.innerWidth - 280, pan.x + selectionBox.x * scale)),
-                top: Math.max(65, Math.min(window.innerHeight - 120, pan.y + selectionBox.y * scale - 48)),
+                left: Math.max(16, Math.min(window.innerWidth - 300, pan.x + selectionBox.x * scale)),
+                top: Math.max(70, pan.y + selectionBox.y * scale - 48),
               }}
             >
               <span className={`text-[11px] font-mono ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                {totalSelectedCount} выбр.
+                {selectedIds.strokeIds.length + selectedIds.shapeIds.length + selectedIds.textIds.length} выбр.
               </span>
               <div className={`w-px h-3.5 ${isDark ? 'bg-neutral-700' : 'bg-neutral-200'}`} />
               <button
@@ -2371,84 +2135,81 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                 <span>Копия</span>
               </button>
               
-              {/* Show color picker only if there are recolorable strokes/shapes/texts */}
-              {(selectedIds.strokeIds.length > 0 || selectedIds.shapeIds.length > 0 || selectedIds.textIds.length > 0) && (
-                <div className="relative">
-                  <button
-                    data-popover-trigger="true"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsSelectionColorPickerOpen(!isSelectionColorPickerOpen);
-                    }}
-                    className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${
-                      isSelectionColorPickerOpen
-                        ? 'bg-[#6355C7] text-white'
-                        : isDark
-                        ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-                        : 'bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-800 shadow-2xs'
-                    }`}
-                    title="Выбрать цвет для выделения"
-                  >
-                    <span
-                      className="w-3 h-3 rounded-full border border-black/20 inline-block shadow-2xs"
-                      style={{ backgroundColor: strokeColor }}
-                    />
-                    <span>Цвет</span>
-                  </button>
+              <div className="relative">
+                <button
+                  data-popover-trigger="true"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsSelectionColorPickerOpen(!isSelectionColorPickerOpen);
+                  }}
+                  className={`px-2 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${
+                    isSelectionColorPickerOpen
+                      ? 'bg-[#6355C7] text-white'
+                      : isDark
+                      ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
+                      : 'bg-white border border-neutral-200 hover:bg-neutral-50 text-neutral-800 shadow-2xs'
+                  }`}
+                  title="Выбрать цвет для выделения"
+                >
+                  <span
+                    className="w-3 h-3 rounded-full border border-black/20 inline-block shadow-2xs"
+                    style={{ backgroundColor: strokeColor }}
+                  />
+                  <span>Цвет</span>
+                </button>
 
-                  {isSelectionColorPickerOpen && (
-                    <div
-                      data-popover="true"
-                      onClick={(e) => e.stopPropagation()}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      className={`absolute bottom-full left-0 mb-2 p-2 rounded-2xl border shadow-2xl flex items-center gap-1.5 z-50 animate-in fade-in zoom-in-95 duration-100 ${
-                        isDark ? 'bg-[#1C1D2C] border-neutral-700' : 'bg-white border-neutral-200 shadow-xl'
-                      }`}
-                    >
-                      {[
-                        '#0F172A',
-                        '#2563EB',
-                        '#7C3AED',
-                        '#DC2626',
-                        '#EA580C',
-                        '#059669',
-                        '#D97706',
-                        '#EC4899',
-                      ].map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRecolorSelected(c);
-                          }}
-                          style={{ backgroundColor: c }}
-                          className={`w-5 h-5 rounded-full border border-black/10 transition-transform hover:scale-115 cursor-pointer ${
-                            strokeColor === c ? 'ring-2 ring-[#6355C7] ring-offset-1' : ''
-                          }`}
-                        />
-                      ))}
-                      <label
-                        title="Свой цвет"
+                {isSelectionColorPickerOpen && (
+                  <div
+                    data-popover="true"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className={`absolute bottom-full left-0 mb-2 p-2 rounded-2xl border shadow-2xl flex items-center gap-1.5 z-50 animate-in fade-in zoom-in-95 duration-100 ${
+                      isDark ? 'bg-[#1C1D2C] border-neutral-700' : 'bg-white border-neutral-200 shadow-xl'
+                    }`}
+                  >
+                    {[
+                      '#0F172A',
+                      '#2563EB',
+                      '#7C3AED',
+                      '#DC2626',
+                      '#EA580C',
+                      '#059669',
+                      '#D97706',
+                      '#EC4899',
+                    ].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="w-5 h-5 rounded-full border border-dashed border-neutral-400 flex items-center justify-center cursor-pointer hover:border-[#6355C7]"
-                      >
-                        <input
-                          type="color"
-                          value={strokeColor}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            handleRecolorSelected(e.target.value);
-                          }}
-                          className="opacity-0 w-0 h-0"
-                        />
-                        <Palette className="w-3 h-3 text-neutral-500" />
-                      </label>
-                    </div>
-                  )}
-                </div>
-              )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRecolorSelected(c);
+                        }}
+                        style={{ backgroundColor: c }}
+                        className={`w-5 h-5 rounded-full border border-black/10 transition-transform hover:scale-115 cursor-pointer ${
+                          strokeColor === c ? 'ring-2 ring-[#6355C7] ring-offset-1' : ''
+                        }`}
+                      />
+                    ))}
+                    <label
+                      title="Свой цвет"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="w-5 h-5 rounded-full border border-dashed border-neutral-400 flex items-center justify-center cursor-pointer hover:border-[#6355C7]"
+                    >
+                      <input
+                        type="color"
+                        value={strokeColor}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          handleRecolorSelected(e.target.value);
+                        }}
+                        className="opacity-0 w-0 h-0"
+                      />
+                      <Palette className="w-3 h-3 text-neutral-500" />
+                    </label>
+                  </div>
+                )}
+              </div>
 
               <button
                 onClick={(e) => {
@@ -2462,15 +2223,14 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
                 }`}
                 title="Удалить выделение"
               >
-                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                <Trash2 className="w-3.5 h-3.5" />
                 <span>Удалить</span>
               </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   setSelectionBox(null);
-                  selectionBoxRef.current = null;
-                  setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+                  setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [] });
                   setIsSelectionColorPickerOpen(false);
                 }}
                 className={`p-1 rounded-lg cursor-pointer ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'}`}

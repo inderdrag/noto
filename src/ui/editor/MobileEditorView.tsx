@@ -524,7 +524,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
               <span className="text-[10px] leading-tight">Рука</span>
             </button>
 
-            {/* 5. Ещё / Выбор */}
+            {/* 5. Ещё */}
             <button
               onClick={() => setIsMoreMenuOpen(true)}
               className={`flex flex-col items-center justify-center rounded-2xl transition-all cursor-pointer ${
@@ -534,19 +534,10 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
                   ? 'bg-[#6355C7] text-white font-bold shadow-sm'
                   : isDark ? 'hover:bg-neutral-800 text-neutral-300' : 'hover:bg-neutral-100 text-neutral-600'
               }`}
-              title={activeTool === 'select' ? 'Выделение активно' : 'Ещё инструменты'}
+              title="Ещё инструменты"
             >
-              {activeTool === 'select' ? (
-                <>
-                  <MousePointer className="w-4 h-4 mb-0.5 text-white" />
-                  <span className="text-[10px] leading-tight font-bold text-white">Выбор</span>
-                </>
-              ) : (
-                <>
-                  <MoreHorizontal className="w-4 h-4 mb-0.5" />
-                  <span className="text-[10px] leading-tight">Ещё</span>
-                </>
-              )}
+              <MoreHorizontal className="w-4 h-4 mb-0.5" />
+              <span className="text-[10px] leading-tight">Ещё</span>
             </button>
           </div>
         </div>
