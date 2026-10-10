@@ -33,11 +33,24 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { AuthModal } from './ui/AuthModal';
 import { syncManager, SyncStatus } from './sync/syncManager';
 import { authManager, UserProfile } from './auth/authManager';
+import { isMobileDevice } from './utils/platform';
 
 export default function App() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return isMobileDevice() || window.innerWidth < 768;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(isMobileDevice() || window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
@@ -518,41 +531,43 @@ export default function App() {
           : 'bg-[#F8FAFC] text-neutral-900'
       }`}
     >
-      {/* Desktop Menu Bar */}
-      <MenuBar
-        theme={settings.theme === 'dark' ? 'dark' : 'light'}
-        onToggleTheme={handleToggleTheme}
-        documentTitle={activeNotebook ? activeNotebook.title : 'Библиотека конспектов'}
-        isSaving={isSaving}
-        onOpenAuth={() => setIsAuthModalOpen(true)}
-        syncStatus={syncStatus}
-        userEmail={userProfile.email}
-        onNewNotebook={handleQuickCreateNotebook}
-        onNewPage={handleNewPage}
-        onImportNoto={() => {
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = '.noto,application/json';
-          input.onchange = (e) => {
-            const f = (e.target as HTMLInputElement).files?.[0];
-            if (f) handleImportNotoFile(f);
-          };
-          input.click();
-        }}
-        onExport={handleExport}
-        onUndo={() => setUndoTrigger(Date.now())}
-        onRedo={() => setRedoTrigger(Date.now())}
-        canUndo={true}
-        canRedo={true}
-        onClearPage={() => setClearPageTrigger(Date.now())}
-        onZoom={handleZoom}
-        onResetZoom={handleResetZoom}
-        onSetPaperType={(paperType) => setPaperTypeTrigger({ type: paperType, timestamp: Date.now() })}
-        onSelectTool={() => {}}
-        onOpenShortcuts={() => setIsShortcutsOpen(true)}
-        onOpenAbout={() => setIsAboutOpen(true)}
-        isInEditor={!!activeNotebook}
-      />
+      {/* Desktop Menu Bar (Desktop only - never rendered on mobile devices) */}
+      {!isMobile && (
+        <MenuBar
+          theme={settings.theme === 'dark' ? 'dark' : 'light'}
+          onToggleTheme={handleToggleTheme}
+          documentTitle={activeNotebook ? activeNotebook.title : 'Библиотека конспектов'}
+          isSaving={isSaving}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
+          syncStatus={syncStatus}
+          userEmail={userProfile.email}
+          onNewNotebook={handleQuickCreateNotebook}
+          onNewPage={handleNewPage}
+          onImportNoto={() => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.noto,application/json';
+            input.onchange = (e) => {
+              const f = (e.target as HTMLInputElement).files?.[0];
+              if (f) handleImportNotoFile(f);
+            };
+            input.click();
+          }}
+          onExport={handleExport}
+          onUndo={() => setUndoTrigger(Date.now())}
+          onRedo={() => setRedoTrigger(Date.now())}
+          canUndo={true}
+          canRedo={true}
+          onClearPage={() => setClearPageTrigger(Date.now())}
+          onZoom={handleZoom}
+          onResetZoom={handleResetZoom}
+          onSetPaperType={(paperType) => setPaperTypeTrigger({ type: paperType, timestamp: Date.now() })}
+          onSelectTool={() => {}}
+          onOpenShortcuts={() => setIsShortcutsOpen(true)}
+          onOpenAbout={() => setIsAboutOpen(true)}
+          isInEditor={!!activeNotebook}
+        />
+      )}
 
       {/* Main View: Library or Editor */}
       {activeNotebook ? (
@@ -567,6 +582,7 @@ export default function App() {
           redoTrigger={redoTrigger}
           clearPageTrigger={clearPageTrigger}
           paperTypeTrigger={paperTypeTrigger}
+          isMobile={isMobile}
         />
       ) : (
         <LibraryView
@@ -591,6 +607,8 @@ export default function App() {
           onToggleTheme={handleToggleTheme}
           zoom={libraryZoom}
           onOpenAuth={() => setIsAuthModalOpen(true)}
+          isMobile={isMobile}
+          onOpenAbout={() => setIsAboutOpen(true)}
         />
       )}
 

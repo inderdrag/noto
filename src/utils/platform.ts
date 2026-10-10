@@ -22,6 +22,18 @@ export function isNative(): boolean {
 }
 
 /**
+ * Returns true if running on a mobile device (Android, iOS, or phone/tablet browser).
+ */
+export function isMobileDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (isNative() || isAndroid() || isIOS()) return true;
+  if (typeof navigator !== 'undefined' && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+    return true;
+  }
+  return window.innerWidth < 768;
+}
+
+/**
  * Returns true if running inside Electron desktop shell.
  * Guaranteed to return false on Android and native mobile.
  */

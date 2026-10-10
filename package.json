@@ -8,7 +8,7 @@
     "url": "https://github.com/inderdrag/noto.git"
   },
   "private": true,
-  "version": "1.0.0",
+  "version": "1.2.0",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -18,9 +18,9 @@
     "clean": "rm -rf dist server.js release",
     "lint": "tsc --noEmit",
     "build:exe": "vite build && electron-builder --win",
-    "cap:sync": "cap sync",
-    "cap:open:android": "cap open android",
-    "cap:build:android": "npm run build && cap sync android"
+    "cap:sync": "npx cap sync",
+    "cap:open:android": "npx cap open android",
+    "cap:build:android": "npm run build && npx cap sync android"
   },
   "build": {
     "appId": "com.noto.app",

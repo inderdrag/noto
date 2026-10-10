@@ -243,64 +243,21 @@ export function renderStroke(
     return;
   }
 
-  // Butter-smooth handwriting rendering with zero stray lines
-  // When pen pressure variation is present, stroke connected quadratic Bézier segments with variable width
-  // Otherwise, stroke single continuous midpoint quadratic Bézier path
-  if (stroke.tool === 'pen' && pressureEnabled && points.length > 2) {
-    let p0 = points[0];
-    let p1 = points[1];
-    let midX = (p0.x + p1.x) / 2;
-    let midY = (p0.y + p1.y) / 2;
+  // High-performance, butter-smooth continuous midpoint quadratic Bézier path
+  // Rendering in a single beginPath() -> stroke() call eliminates GPU pipeline stalls and drawing lag
+  ctx.lineWidth = stroke.width;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
 
-    const baseW = stroke.width;
-    // Initial segment
-    const pr0 = p0.pressure ?? 0.5;
-    ctx.lineWidth = Math.max(0.75, baseW * (0.65 + pr0 * 0.7));
-    ctx.beginPath();
-    ctx.moveTo(p0.x, p0.y);
-    ctx.lineTo(midX, midY);
-    ctx.stroke();
-
-    for (let i = 1; i < points.length - 1; i++) {
-      const curr = points[i];
-      const next = points[i + 1];
-      const nextMidX = (curr.x + next.x) / 2;
-      const nextMidY = (curr.y + next.y) / 2;
-      const pr = curr.pressure ?? 0.5;
-
-      ctx.lineWidth = Math.max(0.75, baseW * (0.65 + pr * 0.7));
-      ctx.beginPath();
-      ctx.moveTo(midX, midY);
-      ctx.quadraticCurveTo(curr.x, curr.y, nextMidX, nextMidY);
-      ctx.stroke();
-
-      midX = nextMidX;
-      midY = nextMidY;
-    }
-
-    const last = points[points.length - 1];
-    const prLast = last.pressure ?? 0.5;
-    ctx.lineWidth = Math.max(0.75, baseW * (0.65 + prLast * 0.7));
-    ctx.beginPath();
-    ctx.moveTo(midX, midY);
-    ctx.lineTo(last.x, last.y);
-    ctx.stroke();
-  } else {
-    // Butter-smooth continuous midpoint quadratic Bézier path
-    ctx.lineWidth = stroke.width;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-
-    for (let i = 1; i < points.length - 1; i++) {
-      const midX = (points[i].x + points[i + 1].x) / 2;
-      const midY = (points[i].y + points[i + 1].y) / 2;
-      ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
-    }
-
-    const last = points[points.length - 1];
-    ctx.lineTo(last.x, last.y);
-    ctx.stroke();
+  for (let i = 1; i < points.length - 1; i++) {
+    const midX = (points[i].x + points[i + 1].x) / 2;
+    const midY = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
   }
+
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
+  ctx.stroke();
 
   ctx.restore();
 }

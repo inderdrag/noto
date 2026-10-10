@@ -62,6 +62,7 @@ import { ToolSidebar } from './editor/ToolSidebar';
 import { FloatingToolbar } from './editor/FloatingToolbar';
 import { MobileEditorView } from './editor/MobileEditorView';
 import { getStandardPageDimensions } from '../storage/db';
+import { isMobileDevice } from '../utils/platform';
 
 interface EditorWorkspaceProps {
   notebook: Notebook;
@@ -74,6 +75,7 @@ interface EditorWorkspaceProps {
   redoTrigger?: number;
   clearPageTrigger?: number;
   paperTypeTrigger?: { type: GridType; timestamp: number } | null;
+  isMobile?: boolean;
 }
 
 const PRESET_STROKE_SIZES = [1, 2, 3, 5, 8, 12, 20, 30];
@@ -139,6 +141,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   redoTrigger,
   clearPageTrigger,
   paperTypeTrigger,
+  isMobile: isMobileProp,
 }) => {
   const isDark = theme === 'dark';
   const activePages = notebook.pages.filter((p) => !p.deleted);
@@ -201,7 +204,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     width: typeof window !== 'undefined' ? window.innerWidth : 1200,
     height: typeof window !== 'undefined' ? window.innerHeight : 800,
   }));
-  const isMobile = windowSize.width < 768;
+  const isMobile = isMobileProp !== undefined ? isMobileProp : (isMobileDevice() || windowSize.width < 768);
   const isLandscapeScreen = windowSize.width > windowSize.height;
 
   // Responsive 3-pane layout states matching the design mockup
@@ -480,9 +483,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
 
     // 2. Physical paper sheet boundaries & drop-shadow with rounded corners
     ctx.save();
-    ctx.shadowColor = theme === 'dark' ? 'rgba(0, 0, 0, 0.6)' : 'rgba(99, 85, 199, 0.08)';
-    ctx.shadowBlur = 24 / scale;
-    ctx.shadowOffsetY = 6 / scale;
+    // High-performance optimization: skip expensive blur passes during active drawing/panning
+    if (!isInteractingRef.current) {
+      ctx.shadowColor = theme === 'dark' ? 'rgba(0, 0, 0, 0.6)' : 'rgba(99, 85, 199, 0.08)';
+      ctx.shadowBlur = Math.min(24, 24 / scale);
+      ctx.shadowOffsetY = 6 / scale;
+    }
     ctx.fillStyle = currentPage.background.color;
     ctx.beginPath();
     ctx.roundRect(0, 0, currentPage.width, currentPage.height, cornerRadius);
@@ -1226,20 +1232,33 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
 
     if (activeStrokeRef.current) {
-      const pts = activeStrokeRef.current.points;
-      const lastPt = pts[pts.length - 1];
-      const dx = pt.x - lastPt.x;
-      const dy = pt.y - lastPt.y;
-      const distSq = dx * dx + dy * dy;
+      const rawEvents: Array<{ clientX: number; clientY: number; pressure?: number }> = 
+        (e.nativeEvent && typeof (e.nativeEvent as any).getCoalescedEvents === 'function')
+          ? (e.nativeEvent as any).getCoalescedEvents()
+          : [e];
 
-      if (distSq >= 1.44) {
-        const smoothPt: Point = {
-          x: lastPt.x * 0.15 + pt.x * 0.85,
-          y: lastPt.y * 0.15 + pt.y * 0.85,
-          pressure: (lastPt.pressure ?? 0.5) * 0.5 + (pt.pressure ?? 0.5) * 0.5,
-          time: pt.time,
-        };
-        pts.push(smoothPt);
+      for (let evtIdx = 0; evtIdx < rawEvents.length; evtIdx++) {
+        const subEvt = rawEvents[evtIdx];
+        const subPt = screenToPageCoord(subEvt.clientX, subEvt.clientY);
+        const subPressure = e.pointerType === 'pen' && (subEvt.pressure ?? 0) > 0 ? (subEvt.pressure ?? 0.5) : 0.5;
+        subPt.pressure = subPressure;
+        subPt.time = Date.now();
+
+        const pts = activeStrokeRef.current.points;
+        const lastPt = pts[pts.length - 1];
+        const dx = subPt.x - lastPt.x;
+        const dy = subPt.y - lastPt.y;
+        const distSq = dx * dx + dy * dy;
+
+        if (distSq >= 1.0) {
+          const smoothPt: Point = {
+            x: lastPt.x * 0.15 + subPt.x * 0.85,
+            y: lastPt.y * 0.15 + subPt.y * 0.85,
+            pressure: (lastPt.pressure ?? 0.5) * 0.5 + (subPt.pressure ?? 0.5) * 0.5,
+            time: subPt.time,
+          };
+          pts.push(smoothPt);
+        }
       }
     } else if (activeTool === 'eraser') {
       handleEraserAction(pt);
