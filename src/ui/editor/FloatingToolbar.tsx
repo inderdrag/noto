@@ -20,7 +20,6 @@ interface FloatingToolbarProps {
   eraserRadius: number;
   historyIndex: number;
   historyLength: number;
-  hasActiveContent?: boolean;
   theme: 'light' | 'dark';
   onSelectTool: (tool: ToolType) => void;
   onToggleToolOptions: () => void;
@@ -38,7 +37,6 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
   eraserRadius,
   historyIndex,
   historyLength,
-  hasActiveContent = false,
   theme,
   onSelectTool,
   onToggleToolOptions,
@@ -118,7 +116,7 @@ export const FloatingToolbar: React.FC<FloatingToolbarProps> = ({
           {/* Undo & Redo buttons */}
           <button
             onClick={onUndo}
-            disabled={historyIndex <= 0 && !hasActiveContent}
+            disabled={historyIndex <= 0}
             className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-800 dark:hover:text-white disabled:opacity-20 cursor-pointer"
             title="Отменить (Ctrl+Z)"
           >

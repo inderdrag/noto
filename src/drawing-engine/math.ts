@@ -133,11 +133,7 @@ export function getShapeBounds(shape: Shape): { x: number; y: number; width: num
  * Checks if a point is inside a rectangle
  */
 export function pointInRect(p: Point, rect: { x: number; y: number; width: number; height: number }): boolean {
-  const minX = Math.min(rect.x, rect.x + rect.width);
-  const maxX = Math.max(rect.x, rect.x + rect.width);
-  const minY = Math.min(rect.y, rect.y + rect.height);
-  const maxY = Math.max(rect.y, rect.y + rect.height);
-  return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+  return p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height;
 }
 
 /**

@@ -276,11 +276,11 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     initialShapes: Shape[];
     initialTexts: TextObject[];
     initialImages: ImageObject[];
-    liveBox?: SelectionBox;
-    liveStrokes?: Stroke[];
-    liveShapes?: Shape[];
-    liveTexts?: TextObject[];
-    liveImages?: ImageObject[];
+    liveBox: SelectionBox;
+    liveStrokes: Stroke[];
+    liveShapes: Shape[];
+    liveTexts: TextObject[];
+    liveImages: ImageObject[];
   }
 
   const [selectedIds, setSelectedIds] = useState<{
@@ -468,70 +468,24 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   );
 
   const handleUndo = useCallback(() => {
-    setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
-    setSelectionBox(null);
-    selectionBoxRef.current = null;
-    isPageLayerDirtyRef.current = true;
+    if (historyIndex <= 0) return;
+    const prevEntry = history[historyIndex - 1];
+    if (!prevEntry) return;
 
-    if (historyIndex > 0) {
-      const prevEntry = history[historyIndex - 1];
-      if (prevEntry) {
-        updateCurrentPage((page) => ({
-          ...page,
-          strokes: prevEntry.strokes,
-          shapes: prevEntry.shapes,
-          texts: prevEntry.texts,
-          images: prevEntry.images,
-        }));
-        setHistoryIndex((prev) => prev - 1);
-        return;
-      }
-    }
-
-    // Fallback if history index is at 0: remove the most recently added active item (image, text, stroke, shape)
-    const activeImages = (currentPage.images || []).filter((i) => !i.deleted);
-    const activeTexts = (currentPage.texts || []).filter((t) => !t.deleted);
-    const activeStrokes = (currentPage.strokes || []).filter((s) => !s.deleted);
-    const activeShapes = (currentPage.shapes || []).filter((sh) => !sh.deleted);
-
-    if (activeImages.length > 0 || activeTexts.length > 0 || activeStrokes.length > 0 || activeShapes.length > 0) {
-      const lastImage = activeImages[activeImages.length - 1];
-      const lastText = activeTexts[activeTexts.length - 1];
-      const lastStroke = activeStrokes[activeStrokes.length - 1];
-      const lastShape = activeShapes[activeShapes.length - 1];
-
-      const candidates = [
-        lastImage ? { type: 'image' as const, id: lastImage.id, time: lastImage.createdAt || 0 } : null,
-        lastText ? { type: 'text' as const, id: lastText.id, time: lastText.createdAt || 0 } : null,
-        lastStroke ? { type: 'stroke' as const, id: lastStroke.id, time: lastStroke.createdAt || 0 } : null,
-        lastShape ? { type: 'shape' as const, id: lastShape.id, time: lastShape.createdAt || 0 } : null,
-      ].filter(Boolean) as Array<{ type: 'image' | 'text' | 'stroke' | 'shape'; id: string; time: number }>;
-
-      candidates.sort((a, b) => b.time - a.time);
-      const target = candidates[0];
-
-      if (target) {
-        const now = Date.now();
-        updateCurrentPage((page) => ({
-          ...page,
-          images: target.type === 'image' ? (page.images || []).map((img) => img.id === target.id ? { ...img, deleted: true, updatedAt: now } : img) : page.images,
-          texts: target.type === 'text' ? (page.texts || []).map((t) => t.id === target.id ? { ...t, deleted: true, updatedAt: now } : t) : page.texts,
-          strokes: target.type === 'stroke' ? (page.strokes || []).map((s) => s.id === target.id ? { ...s, deleted: true, updatedAt: now } : s) : page.strokes,
-          shapes: target.type === 'shape' ? (page.shapes || []).map((sh) => sh.id === target.id ? { ...sh, deleted: true, updatedAt: now } : sh) : page.shapes,
-        }), 'Undo last item');
-      }
-    }
-  }, [currentPage, history, historyIndex, updateCurrentPage]);
+    updateCurrentPage((page) => ({
+      ...page,
+      strokes: prevEntry.strokes,
+      shapes: prevEntry.shapes,
+      texts: prevEntry.texts,
+      images: prevEntry.images,
+    }));
+    setHistoryIndex((prev) => prev - 1);
+  }, [history, historyIndex, updateCurrentPage]);
 
   const handleRedo = useCallback(() => {
     if (historyIndex >= history.length - 1) return;
     const nextEntry = history[historyIndex + 1];
     if (!nextEntry) return;
-
-    setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
-    setSelectionBox(null);
-    selectionBoxRef.current = null;
-    isPageLayerDirtyRef.current = true;
 
     updateCurrentPage((page) => ({
       ...page,
@@ -1216,7 +1170,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           initialTexts,
           initialImages,
         };
-        isPageLayerDirtyRef.current = true;
         return;
       }
     }
@@ -1264,53 +1217,17 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         italic: false,
       });
     } else if (activeTool === 'select') {
-      // Check if clicking directly on an item (image, text, shape, stroke)
-      const hitImage = [...(currentPage.images || [])].reverse().find(
-        (img) => !img.deleted && isPointInImage(pt, img, 14)
-      );
-      const hitText = !hitImage ? [...(currentPage.texts || [])].reverse().find(
-        (t) => !t.deleted && pointInRect(pt, { x: t.x, y: t.y, width: t.width || 120, height: t.height || 40 })
-      ) : undefined;
-      const hitStroke = (!hitImage && !hitText) ? [...(currentPage.strokes || [])].reverse().find(
-        (s) => !s.deleted && strokeIntersectsCircle(s, pt, Math.max(14, s.width * 1.5))
-      ) : undefined;
-      const hitShape = (!hitImage && !hitText && !hitStroke) ? [...(currentPage.shapes || [])].reverse().find(
-        (sh) => !sh.deleted && pointInRect(pt, {
-          x: Math.min(sh.x, sh.x + sh.width) - 8,
-          y: Math.min(sh.y, sh.y + sh.height) - 8,
-          width: Math.abs(sh.width) + 16,
-          height: Math.abs(sh.height) + 16,
-        })
-      ) : undefined;
-
-      if (hitImage || hitText || hitStroke || hitShape) {
-        const sIds = hitStroke ? [hitStroke.id] : [];
-        const shIds = hitShape ? [hitShape.id] : [];
-        const tIds = hitText ? [hitText.id] : [];
-        const imgIds = hitImage ? [hitImage.id] : [];
-
-        setSelectedIds({ strokeIds: sIds, shapeIds: shIds, textIds: tIds, imageIds: imgIds });
-        const tightBox = computeBoundingBoxForItems(sIds, shIds, tIds, imgIds, currentPage);
-        setSelectionBox(tightBox);
-        selectionBoxRef.current = tightBox;
-
-        if (tightBox) {
-          selectionTransformRef.current = {
-            handle: 'inside',
-            startPt: pt,
-            initialBox: tightBox,
-            initialStrokes: hitStroke ? [{ ...hitStroke, points: hitStroke.points.map((p) => ({ ...p })) }] : [],
-            initialShapes: hitShape ? [{ ...hitShape }] : [],
-            initialTexts: hitText ? [{ ...hitText }] : [],
-            initialImages: hitImage ? [{ ...hitImage }] : [],
-          };
-          isPageLayerDirtyRef.current = true;
-        }
-      } else {
-        setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
-        setSelectionBox(null);
-        selectionBoxRef.current = null;
-      }
+      setSelectedIds({ strokeIds: [], shapeIds: [], textIds: [], imageIds: [] });
+      setSelectionBox({
+        x: pt.x,
+        y: pt.y,
+        width: 0,
+        height: 0,
+        strokeIds: [],
+        shapeIds: [],
+        textIds: [],
+        imageIds: [],
+      });
     }
   };
 
@@ -1566,7 +1483,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       const w = Math.abs(pt.x - sp.x);
       const h = Math.abs(pt.y - sp.y);
 
-      const mBox: SelectionBox = {
+      setSelectionBox({
         x: minX,
         y: minY,
         width: w,
@@ -1575,8 +1492,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
         shapeIds: [],
         textIds: [],
         imageIds: [],
-      };
-      selectionBoxRef.current = mBox;
+      });
     }
   };
 
@@ -1593,7 +1509,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
 
     isPointerDownRef.current = false;
-    const savedStartPt = startPointRef.current;
     startPointRef.current = null;
 
     try {
@@ -1638,7 +1553,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
           texts: (currentPage.texts || []).map((t) => selTextMap.get(t.id) || t),
           images: (currentPage.images || []).map((img) => selImageMap.get(img.id) || img),
         }
-      ) || liveBox || null;
+      ) || liveBox;
 
       setSelectionBox(nextTightBox);
       selectionBoxRef.current = nextTightBox;
@@ -1673,7 +1588,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
 
     if (activeTool === 'select') {
-      const sp = savedStartPt;
+      const sp = startPointRef.current;
       const endPt = screenToPageCoord(e.clientX, e.clientY);
       const dragDist = sp ? Math.hypot(endPt.x - sp.x, endPt.y - sp.y) : 0;
       const isTinyClick = dragDist < 8;
@@ -1967,8 +1882,55 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
     }
   };
 
+  // Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+        return;
+      }
+
+      if (e.code === 'Space') setIsSpacePressed(true);
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        handleRedo();
+      } else if (e.key === '1') setActiveTool('pen');
+      else if (e.key === '2') setActiveTool('pencil');
+      else if (e.key === '3') setActiveTool('marker');
+      else if (e.key === '4') setActiveTool('eraser');
+      else if (e.key === '5') setActiveTool('rect');
+      else if (e.key.toLowerCase() === 't') setActiveTool('text');
+      else if (e.key.toLowerCase() === 'v') setActiveTool('select');
+      else if (e.key.toLowerCase() === 'h') setActiveTool('pan');
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        handleDeleteSelected();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        handleZoomDelta(1.15);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+        e.preventDefault();
+        handleZoomDelta(0.85);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault();
+        handleResetZoom();
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') setIsSpacePressed(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [handleDeleteSelected, handleRedo, handleUndo]);
+
   // Insert image
-  const insertImageFile = useCallback((file: File) => {
+  const insertImageFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -2021,106 +1983,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
       img.src = dataUrl;
     };
     reader.readAsDataURL(file);
-  }, [currentPage.width, updateCurrentPage]);
-
-  // Global Clipboard Paste (Ctrl+V / Cmd+V for images)
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA' ||
-        editingText !== null
-      ) {
-        return;
-      }
-
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.type.indexOf('image') !== -1) {
-          const file = item.getAsFile();
-          if (file) {
-            e.preventDefault();
-            insertImageFile(file);
-            break;
-          }
-        }
-      }
-    };
-
-    window.addEventListener('paste', handlePaste);
-    return () => {
-      window.removeEventListener('paste', handlePaste);
-    };
-  }, [editingText, insertImageFile]);
-
-  // Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
-        return;
-      }
-
-      if (e.code === 'Space') setIsSpacePressed(true);
-      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        if (e.shiftKey) handleRedo();
-        else handleUndo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-        handleRedo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-        // Fallback for Ctrl+V via Async Clipboard API if clipboard permissions are granted
-        if (!editingText && navigator.clipboard?.read) {
-          navigator.clipboard.read().then((items) => {
-            for (const item of items) {
-              const imageType = item.types.find((t) => t.startsWith('image/'));
-              if (imageType) {
-                item.getType(imageType).then((blob) => {
-                  const file = new File([blob], `pasted_image_${Date.now()}.png`, { type: imageType });
-                  insertImageFile(file);
-                }).catch(() => {});
-                break;
-              }
-            }
-          }).catch(() => {});
-        }
-      } else if (e.key === '1') setActiveTool('pen');
-      else if (e.key === '2') setActiveTool('pencil');
-      else if (e.key === '3') setActiveTool('marker');
-      else if (e.key === '4') setActiveTool('eraser');
-      else if (e.key === '5') setActiveTool('rect');
-      else if (e.key.toLowerCase() === 't') setActiveTool('text');
-      else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'v') setActiveTool('select');
-      else if (e.key.toLowerCase() === 'h') setActiveTool('pan');
-      else if (e.key === 'Delete' || e.key === 'Backspace') {
-        handleDeleteSelected();
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
-        e.preventDefault();
-        handleZoomDelta(1.15);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === '-') {
-        e.preventDefault();
-        handleZoomDelta(0.85);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
-        e.preventDefault();
-        handleResetZoom();
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') setIsSpacePressed(false);
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, [editingText, handleDeleteSelected, handleRedo, handleUndo, insertImageFile]);
-
-
+  };
 
   const handleNextPage = () => {
     if (currentPageIndex < activePages.length - 1) {
@@ -2195,11 +2058,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
   };
 
   const currentRulingName = RULING_TYPES.find((r) => r.id === currentPage.background.type)?.name || 'Клетка';
-  const hasActiveContent =
-    (currentPage.strokes || []).some((s) => !s.deleted) ||
-    (currentPage.shapes || []).some((sh) => !sh.deleted) ||
-    (currentPage.texts || []).some((t) => !t.deleted) ||
-    (currentPage.images || []).some((img) => !img.deleted);
   const hasSelectedItems =
     selectedIds.strokeIds.length > 0 ||
     selectedIds.shapeIds.length > 0 ||
@@ -2406,7 +2264,6 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({
               eraserRadius={eraserRadius}
               historyIndex={historyIndex}
               historyLength={history.length}
-              hasActiveContent={hasActiveContent}
               theme={theme}
               onSelectTool={(tool) => {
                 setActiveTool(tool);

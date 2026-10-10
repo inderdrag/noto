@@ -219,7 +219,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
 
             <button
               onClick={onUndo}
-              disabled={historyIndex <= 0 && !(currentPage.images?.some((i) => !i.deleted) || currentPage.texts?.some((t) => !t.deleted) || currentPage.strokes?.some((s) => !s.deleted) || currentPage.shapes?.some((sh) => !sh.deleted))}
+              disabled={historyIndex <= 0}
               className={`w-10 h-10 rounded-full border shadow-xs flex items-center justify-center transition-all active:scale-95 cursor-pointer disabled:opacity-30 ${
                 isDark 
                   ? 'bg-[#181928] border-neutral-700 text-neutral-200' 
